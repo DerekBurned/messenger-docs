@@ -52,6 +52,20 @@ calls.
 - [[End-to-End Encryption]] - X25519 + HKDF + AES-GCM message encryption, key registry, epoch
   rotation, safety numbers.
 
+## Feature code walkthroughs
+
+Each feature also has a `- Code` companion that embeds and explains that feature's real source
+(verified against the repo), block by block:
+
+- [[Authentication - Code]]
+- [[Conversations List - Code]]
+- [[Chat and Messaging - Code]]
+- [[Calls (Voice and Video) - Code]]
+- [[Presence and Typing - Code]]
+- [[Notifications - Code]]
+- [[Settings - Code]]
+- [[End-to-End Encryption - Code]]
+
 ## Reference
 
 - [[Tech Stack and Versions]] - every library and version from `gradle/libs.versions.toml`
