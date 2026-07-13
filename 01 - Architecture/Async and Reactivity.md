@@ -1,0 +1,225 @@
+# Async and Reactivity
+
+Every asynchronous primitive in the app, with the property that forced the choice and a real
+call site. Coroutines version is `1.11.0` (`gradle/libs.versions.toml:28`).
+
+## Flow (cold) - a stream that does work per collector
+
+A cold `Flow` starts fresh for each collector and stops when collection stops. Used wherever
+the source is a query or a listener that should only be active while someone is watching.
+
+Canonical example - the local message stream, `MessageRepositoryImpl.getMessagesStream`
+(`data/repository/MessageRepositoryImpl.kt:34`):
+
+```kotlin
+override fun getMessagesStream(conversationId: String): Flow<List<Message>> {
+    return messageBox.query(
+        ObxMessage_.conversationId.equal(conversationId)
+            .and(ObxMessage_.deleted.equal(false)),
+    )
+        .order(ObxMessage_.timestamp)
+        .build()
+        .asFlow()
+        .map { rows -> rows.map { it.toDomain() } }
+        .flowOn(Dispatchers.Default)
+}
+```
+
+Goal: expose the conversation's messages as a live list that re-emits whenever the local
+database changes, without the UI polling. It returns a `Flow` (cold) because the underlying
+ObjectBox subscription should exist only while a screen is collecting; when the user leaves the
+chat, collection ends and the native subscription is torn down (see `asFlow` below).
+
+Why `flowOn(Dispatchers.Default)`: the `map { it.toDomain() }` converts every row to a domain
+model - pure CPU work. `flowOn` moves the upstream (the query emission and the mapping) onto
+the `Default` (CPU) dispatcher so the mapping never runs on the main thread, while the
+collector still receives on whatever context it collects in. `Default` and not `IO` because
+this is computation over already-fetched rows, not blocking IO.
+
+## `callbackFlow` - bridging a listener API into a Flow
+
+`callbackFlow` is the tool for adapting a register/unregister callback into a cold Flow. Three
+listener families are bridged this way.
+
+### ObjectBox query subscription - `ObxFlow.asFlow`
+
+`data/local/obx/ObxFlow.kt:8`:
+
+```kotlin
+fun <T> Query<T>.asFlow(): Flow<List<T>> = callbackFlow {
+    val query = this@asFlow
+    val subscription = subscribe().observer { data -> trySend(data) }
+    awaitClose {
+        subscription.cancel()
+        query.close()
+    }
+}
+```
+
+Goal: turn an ObjectBox `Query` into a Flow that emits the full result set now and again on
+every change to matching rows. `callbackFlow` is required (not `flow { }`) because the data
+arrives through an ObjectBox `observer` callback, not by pulling.
+
+Two cleanups in `awaitClose`, both load-bearing:
+- `subscription.cancel()` stops ObjectBox from calling back after the collector is gone.
+- `query.close()` releases the native `Query` handle. The `val query = this@asFlow` line
+  exists precisely so this resolves to `io.objectbox.query.Query.close()` and not to the
+  `ProducerScope.close()` that `callbackFlow` also brings into scope. Without capturing the
+  receiver, an unqualified `close()` binds to the channel and the native query handle leaks
+  on every unsubscribe. `awaitClose` runs when the collector cancels, so both cleanups are
+  tied to the collector's lifetime.
+
+`trySend` (not `send`) because the observer callback is not a suspend context; `trySend` is
+non-blocking and, with the default buffered channel, drops nothing under normal load.
+
+### Firestore snapshot listener - `FirestoreService.getRecentMessagesStream`
+
+`data/remote/firebase/FirestoreService.kt:209`. A `callbackFlow` wraps
+`addSnapshotListener(MetadataChanges.INCLUDE)`:
+
+```kotlin
+val listener = messagesRef.addSnapshotListener(MetadataChanges.INCLUDE) { snapshot, error ->
+    if (error != null) { close(error); return@addSnapshotListener }
+    if (snapshot != null) {
+        val rows = snapshot.documents.mapNotNull { doc ->
+            doc.toObject(RemoteMessageDto::class.java)?.copy(id = doc.id)
+                ?.let { it to doc.metadata.hasPendingWrites() }
+        }.reversed()
+        trySend(rows)
+    }
+}
+awaitClose { listener.remove() }
+```
+
+`MetadataChanges.INCLUDE` makes the listener also fire for local, not-yet-acknowledged writes,
+and `doc.metadata.hasPendingWrites()` tags each row as "pending" so optimistic sends render
+before the server confirms them. `close(error)` propagates a listen failure as a Flow
+exception; `awaitClose { listener.remove() }` detaches the Firestore listener when collection
+ends. The raw DTO flow is then `map`-ped through the E2EE codec
+(`data/remote/firebase/FirestoreService.kt:234`) - see [[End-to-End Encryption]].
+
+`getAllConversations` (`data/remote/firebase/FirestoreService.kt:422`) uses the same shape and
+additionally surfaces removed document ids and `snapshot.metadata.isFromCache` in a
+`ConversationSync` value.
+
+### Realtime Database ValueEventListener - presence/typing/connection
+
+`data/remote/firebase/RealtimeDbService.kt` bridges three RTDB references with `callbackFlow` +
+`ValueEventListener`. Connection state (`RealtimeDbService.kt:23`):
+
+```kotlin
+fun observeConnectionState(): Flow<Boolean> = callbackFlow {
+    val listener = object : ValueEventListener {
+        override fun onDataChange(snapshot: DataSnapshot) {
+            trySend(snapshot.getValue(Boolean::class.java) ?: false)
+        }
+        override fun onCancelled(error: DatabaseError) { close(error.toException()) }
+    }
+    connectedRef.addValueEventListener(listener)
+    awaitClose { connectedRef.removeEventListener(listener) }
+}
+```
+
+`observePresence` (`RealtimeDbService.kt:59`) and `observeTyping` (`RealtimeDbService.kt:88`)
+follow the identical pattern. In every case `awaitClose` removes the listener so a
+backgrounded observer stops receiving RTDB pushes.
+
+## StateFlow (hot, conflated, always-has-value)
+
+Used where there must always be a current value to read and new subscribers should get the
+latest immediately.
+
+- ViewModel UI state - `MutableStateFlow(initialState)` exposed via `asStateFlow()`
+  (`presentation/base/MviViewModel.kt:25`). The UI needs a value on first frame; a bare `Flow`
+  would leave the screen blank until the first emission. See [[Presentation Layer (MVI)]].
+- Global call state - `ActiveCallHolder` (`data/remote/call/ActiveCallHolder.kt:37`) is an
+  `object` with a `MutableStateFlow<ActiveCall?>`. The call foreground service is the single
+  writer; the UI (`presentation/navigation/navigation.kt:143`, `ActiveCallBar`,
+  `CallViewModel`) is a reader. A `StateFlow` fits because "the current call" is state with a
+  defined current value (possibly `null`), read from many places. See
+  [[Calls (Voice and Video)]].
+- Call bar presentation mode - `CallBarPresenter.mode`
+  (`presentation/components/call/CallBarPresenter.kt:12`) is a `MutableStateFlow<CallBarMode>`
+  (BAR / HIDDEN / BUBBLE).
+- Media transfer progress - `MediaTransferManager.transfers` re-exposed as
+  `IMediaRepository.transfers: StateFlow<Map<String, MediaTransfer>>`
+  (`data/repository/MediaRepositoryImpl.kt:63`).
+
+`_state.update { }` (`presentation/base/MviViewModel.kt:42`,
+`presentation/viewmodel/ConversationsViewModel.kt:65`) is the atomic compare-and-set update
+that makes concurrent reducers safe.
+
+## SharedFlow vs Channel for one-shot events
+
+Two mechanisms for "events, not state", chosen per site:
+
+- `SharedFlow(replay = 0, extraBufferCapacity = 16, onBufferOverflow = DROP_OLDEST)` for MVI
+  effects (`presentation/base/MviViewModel.kt:28`). Zero replay so a rotated screen does not
+  re-fire the effect; buffered + non-suspending emit so `emitEffect` never blocks.
+- `Channel(Channel.BUFFERED).receiveAsFlow()` for the call-screen exit signal in `CallViewModel`
+  (`presentation/viewmodel/CallViewModel.kt:61`). A `Channel` is single-consumer with
+  guaranteed delivery, which matches "navigate away exactly once".
+- `Channel(Channel.CONFLATED)` for presence transitions in `PresenceManager`
+  (`data/presence/PresenceManager.kt:24`). CONFLATED keeps only the latest requested state, so
+  a rapid online->away->online burst collapses to the final value before it is applied.
+
+## Cold vs hot bridging operators
+
+- `flow { }` builders for one-shot suspend work wrapped as a stream: `SendMessageUseCase`
+  (`domain/usecase/message/SendMessageUseCase.kt:21`) emits `Resource.Loading/Success/Error`;
+  `MessageRepositoryImpl.observeRecentMessages` (`data/repository/MessageRepositoryImpl.kt:139`)
+  wraps a collect in a `flow { }.flowOn(Dispatchers.IO)` (IO here because it drives a network
+  snapshot stream and writes rows).
+- `combine` to merge streams: `ChatViewModel.observePartnerPresence`
+  (`presentation/viewmodel/ChatViewModel.kt:283`) combines the presence flow with a 60s
+  `tickerFlow` so the "last seen N minutes ago" label refreshes on a timer even when presence
+  itself has not changed; `FirebasePresenceService.observeMultiplePresence`
+  (`data/service/FirebasePresenceService.kt:37`) combines a list of per-user presence flows
+  into a single `Map`.
+- `onEach { }.launchIn(scope)` for fire-and-forget collection into state:
+  `ChatViewModel.observePartnerAlias` (`presentation/viewmodel/ChatViewModel.kt:118`) and
+  `observeTransfers` (`presentation/viewmodel/ChatViewModel.kt:303`).
+- `collectLatest` where a new emission should cancel work started for the previous one:
+  `CallForegroundService.observeRemoteStatus`
+  (`data/remote/call/CallForegroundService.kt:342`), `CallViewModel.observeActiveCall`
+  (`presentation/viewmodel/CallViewModel.kt:115`), `SyncCoordinator`
+  (`data/sync/SyncCoordinator.kt:30`).
+- `onStart` / `catch` to bracket a stream with a loading state and error handling:
+  `ConversationsViewModel.loadConversations`
+  (`presentation/viewmodel/ConversationsViewModel.kt:64`), `GetMessagesUseCase`
+  (`domain/usecase/message/GetMessageUseCase.kt:16`).
+- `withTimeoutOrNull` to bound a wait: `MediaRepositoryImpl.uploadAndSend`
+  (`data/repository/MediaRepositoryImpl.kt:200`) caps a multi-file upload at 35s;
+  `ChatViewModel.jumpToMessage` (`presentation/viewmodel/ChatViewModel.kt:192`) bounds each
+  page load while searching backward.
+
+## Scopes and dispatchers - which one, and why
+
+- `viewModelScope` - all ViewModel work (`ChatViewModel`, `ConversationsViewModel`,
+  `AuthViewModel`, `CallViewModel`). Cancelled automatically in `onCleared`, so nothing
+  outlives the screen. Manual `Job` handles (for example `typingJob`,
+  `presentation/viewmodel/ChatViewModel.kt:68`) are cancelled explicitly to debounce.
+- A `@Singleton` owning its own `CoroutineScope(SupervisorJob() + Dispatchers.IO)` - used where
+  work must outlive any single screen. `MediaRepositoryImpl`
+  (`data/repository/MediaRepositoryImpl.kt:60`): an upload started from the chat screen must
+  finish even after the user navigates away, so it cannot use `viewModelScope`. `SupervisorJob`
+  means one failed upload does not cancel the others; `Dispatchers.IO` because uploads are
+  blocking IO. The scope is never cancelled - it lives for the app, matching the `@Singleton`
+  lifetime.
+- `CoroutineScope(SupervisorJob() + Dispatchers.IO)` inside a `Service` - `CallForegroundService`
+  (`data/remote/call/CallForegroundService.kt:53`) runs its call state machine (signaling
+  writes, ringtones, timeouts) on this scope and cancels it in `onDestroy`
+  (`data/remote/call/CallForegroundService.kt:911`) via `scope.coroutineContext[Job]?.cancel()`,
+  so no timeout job survives the service. See [[Calls (Voice and Video)]].
+- `CoroutineScope(SupervisorJob() + Dispatchers.Default)` - `SyncCoordinator`
+  (`data/sync/SyncCoordinator.kt:23`) watches the network flow on `Default` and triggers
+  WorkManager; light coordination, not blocking IO, hence `Default`.
+- Ephemeral `CoroutineScope(Dispatchers.IO)` per callback - `MyFirebaseMessagingService`
+  (`data/remote/firebase/MyFirebaseMessagingService.kt:47`, `:92`). An FCM callback has no
+  ViewModel or long-lived scope handy, so each message spins a short-lived IO scope to persist
+  and notify. See [[Notifications]].
+
+## Related
+
+[[Presentation Layer (MVI)]] - [[Data Layer]] - [[Calls (Voice and Video)]] -
+[[Presence and Typing]] - [[End-to-End Encryption]] - [[Architecture Overview]]
