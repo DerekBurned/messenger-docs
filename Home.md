@@ -17,6 +17,15 @@ Compose UI, MVI presentation, Hilt DI, ObjectBox local persistence, Firebase bac
 (Firestore + Realtime Database + Auth + Storage + Cloud Messaging + Functions), Agora RTC for
 calls.
 
+## Start here if you are new
+
+Plain-language explainers, no background needed:
+
+- [[Reading the Code - Simple Patterns]] - the six patterns that repeat everywhere (the
+  `_state`/`state` backing field, use cases, repositories, cold Flow), each with annotated code.
+- [[End-to-End Encryption - Explained Simply]] - follow one message (`hi`) end to end, with
+  diagrams and a worked example.
+
 ## Architecture
 
 - [[Architecture Overview]] - the three layers, module layout, the dependency graph, how a
