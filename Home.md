@@ -19,12 +19,24 @@ calls.
 
 ## Start here if you are new
 
-Plain-language explainers, no background needed:
+Plain-language explainers, no background needed. Each has annotated code (with teaching
+comments), a step-by-step data trace, a diagram, and a worked example.
+
+Start with the patterns, then any feature:
 
 - [[Reading the Code - Simple Patterns]] - the six patterns that repeat everywhere (the
-  `_state`/`state` backing field, use cases, repositories, cold Flow), each with annotated code.
-- [[End-to-End Encryption - Explained Simply]] - follow one message (`hi`) end to end, with
-  diagrams and a worked example.
+  `_state`/`state` backing field, use cases, repositories, cold Flow).
+
+Every feature has an "Explained Simply" companion:
+
+- [[Authentication - Explained Simply]]
+- [[Conversations List - Explained Simply]]
+- [[Chat and Messaging - Explained Simply]]
+- [[Calls (Voice and Video) - Explained Simply]]
+- [[Presence and Typing - Explained Simply]]
+- [[Notifications - Explained Simply]]
+- [[Settings - Explained Simply]]
+- [[End-to-End Encryption - Explained Simply]]
 
 ## Architecture
 
