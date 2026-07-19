@@ -164,7 +164,22 @@ chat render via `CallMessageCards`.
 - The bar/bubble/hidden presentation is decoupled into `CallBarPresenter` so gesture handling and
   rendering stay simple and the mode persists across navigation.
 
+## Visualization
+
+```mermaid
+flowchart TD
+    INTENTS[Intents START_OUTGOING ACCEPT END] --> SVC[CallForegroundService: state machine]
+    SVC -->|only writer| HOLD[(ActiveCallHolder StateFlow)]
+    SVC --> AG[AgoraCallService joinChannel]
+    AG --> RTC[Agora RTC channel]
+    HOLD --> SCR[CallScreen]
+    HOLD --> BAR[ActiveCallBar swipe bubble snap-back]
+    HOLD --> NOTIF[Call notification]
+    SVC --> REC[MissedCallRecorder writes call message]
+    REC --> HIST[Calls tab history]
+```
+
 ## Related
 
 [[Async and Reactivity]] - [[Navigation]] - [[Notifications]] - [[Presence and Typing]] -
-[[Data Layer]] - [[Architecture Overview]]
+[[Data Layer]] - [[Architecture Overview]] - [[Calls (Voice and Video) - Basic Example]]

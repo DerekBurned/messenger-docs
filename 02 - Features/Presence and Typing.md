@@ -92,7 +92,22 @@ Typing is written under `typing/{conversationId}/{uid}` in RTDB.
 - Firestore remains the store of record for messages and conversations; RTDB is used only for
   the transient signals (presence, typing, and call signaling in [[Calls (Voice and Video)]]).
 
+## Visualization
+
+```mermaid
+flowchart TD
+    LC[App lifecycle + login/logout] --> PM[PresenceManager conflated channel]
+    PM --> SET[setMyPresence + setupOnDisconnect]
+    SET --> RTDB[(Realtime DB presence/uid)]
+    RTDB -->|server onDisconnect if socket drops| OFF[state offline]
+    RTDB --> OBS[observePresence callbackFlow]
+    OBS --> COMB[combine per-user -> map]
+    COMB --> ROWS[Conversation rows + chat header]
+    TXT[Typing: onTextChanged debounce 500ms] --> RTDB
+```
+
 ## Related
 
 [[Conversations List]] - [[Chat and Messaging]] - [[Authentication]] -
-[[Calls (Voice and Video)]] - [[Async and Reactivity]] - [[Data Layer]]
+[[Calls (Voice and Video)]] - [[Async and Reactivity]] - [[Data Layer]] -
+[[Presence and Typing - Basic Example]]

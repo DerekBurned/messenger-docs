@@ -131,8 +131,23 @@ user is already looking at. See [[Notifications]].
   sender-only guard on for-everyone, match user expectations and are enforced in the repository,
   not just the UI.
 
+## Visualization
+
+```mermaid
+flowchart TD
+    SEND[SendMessage intent] --> UC[SendMessageUseCase]
+    UC --> REPO[MessageRepositoryImpl]
+    REPO -->|1 put local SENDING| OBX[(ObjectBox)]
+    OBX -->|reactive query re-emits| LIST[Live message list]
+    LIST --> SCREEN[ChatScreen renders]
+    REPO -->|2 try server| FS[Firestore]
+    FS -->|failure| FAIL[status FAILED + enqueue retry]
+    FS -->|incoming| SYNC[syncMessages writes to OBX]
+    SYNC --> OBX
+```
+
 ## Related
 
 [[Data Layer]] - [[Async and Reactivity]] - [[Presentation Layer (MVI)]] -
 [[Presence and Typing]] - [[Notifications]] - [[End-to-End Encryption]] -
-[[Conversations List]]
+[[Conversations List]] - [[Chat and Messaging - Basic Example]]

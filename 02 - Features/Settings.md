@@ -82,7 +82,18 @@ project token layer on top.
 - Exposing the preference as a `StateFlow` via `stateIn` gives the UI a synchronous current
   value while keeping a single reactive source of truth.
 
+## Visualization
+
+```mermaid
+flowchart LR
+    UI[AppearanceScreen toggle] -->|setThemeMode| DS[(DataStore theme_prefs)]
+    DS -->|themeMode cold Flow| SI[stateIn StateFlow]
+    SI --> ROOT[MainActivity root]
+    ROOT -->|MessengerTheme| TREE[App re-themes light/dark]
+```
+
 ## Related
 
 [[End-to-End Encryption]] - [[Notifications]] - [[Data Layer]] - [[Navigation]] -
-[[Presentation Layer (MVI)]] - [[Async and Reactivity]]
+[[Presentation Layer (MVI)]] - [[Async and Reactivity]] - [[Appearance and Theming]] -
+[[Settings - Basic Example]]

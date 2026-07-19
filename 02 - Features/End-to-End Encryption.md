@@ -140,7 +140,21 @@ users comparing safety numbers out of band can confirm no man-in-the-middle. Sur
   safety numbers. The exact rotation/epoch-bump policy beyond what the code shows was not
   captured in source - confirm before documenting it as a guarantee.
 
+## Visualization
+
+```mermaid
+flowchart TD
+    MYPRIV[My X25519 private key] --> ECDH[X25519 shared secret]
+    PEERPUB[Peer public key from registry] --> ECDH
+    ECDH --> HKDF[HKDF-SHA256 salted by sorted uids + epochs]
+    HKDF --> KEY[32-byte AES key]
+    PLAIN[Message payload JSON] --> ENC[AES-256-GCM + AAD id/sender/type]
+    KEY --> ENC
+    ENC --> DTO[RemoteMessageDto enc=1 ciphertext nonce epochs]
+    DTO -->|decode mirrors: pick epochs, load peer key, derive, decrypt| OUT[Plaintext or undecryptable placeholder]
+```
+
 ## Related
 
 [[Chat and Messaging]] - [[Data Layer]] - [[Dependency Injection (Hilt)]] - [[Settings]] -
-[[Notifications]] - [[Async and Reactivity]]
+[[Notifications]] - [[Async and Reactivity]] - [[End-to-End Encryption - Basic Example]]

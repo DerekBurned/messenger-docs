@@ -37,6 +37,7 @@ Every feature has an "Explained Simply" companion:
 - [[Notifications - Explained Simply]]
 - [[Settings - Explained Simply]]
 - [[End-to-End Encryption - Explained Simply]]
+- [[Appearance and Theming - Explained Simply]]
 
 ## Architecture
 
@@ -72,6 +73,8 @@ Every feature has an "Explained Simply" companion:
 - [[Settings]] - the settings screens and the DataStore-backed theme preference.
 - [[End-to-End Encryption]] - X25519 + HKDF + AES-GCM message encryption, key registry, epoch
   rotation, safety numbers.
+- [[Appearance and Theming]] - light/dark/system theme mode, gradient and imported wallpapers,
+  background intensity, the design-token layer, and the reusable motion modifiers.
 
 ## Feature code walkthroughs
 
@@ -86,6 +89,28 @@ Each feature also has a `- Code` companion that embeds and explains that feature
 - [[Notifications - Code]]
 - [[Settings - Code]]
 - [[End-to-End Encryption - Code]]
+- [[Appearance and Theming - Code]]
+
+## Basic examples
+
+Each feature also has a `- Basic Example` companion. It shows the *inherited* pattern the feature is
+built on - the minimal, canonical, textbook form of the underlying library or base pattern (from
+[[Reading the Code - Simple Patterns]]) - and then points at where the real, specialised source
+differs. Read the basic example first to see the skeleton, then the `- Code` note for the real
+thing.
+
+- [[Authentication - Basic Example]]
+- [[Conversations List - Basic Example]]
+- [[Chat and Messaging - Basic Example]]
+- [[Calls (Voice and Video) - Basic Example]]
+- [[Presence and Typing - Basic Example]]
+- [[Notifications - Basic Example]]
+- [[Settings - Basic Example]]
+- [[End-to-End Encryption - Basic Example]]
+- [[Appearance and Theming - Basic Example]]
+
+Every feature note also carries a `## Visualization` section with a Mermaid diagram of its core
+data flow.
 
 ## Reference
 

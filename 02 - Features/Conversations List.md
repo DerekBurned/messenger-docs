@@ -96,7 +96,23 @@ Three distinct operations, mirrored at the message level in [[Chat and Messaging
 - `visibleTo` + `clearedAt` implement per-user deletion without server-side per-user copies of
   the conversation, and reuse the same cutoff mechanic the message stream already honours.
 
+## Visualization
+
+```mermaid
+flowchart TD
+    OBX[(ObjectBox conversations)] --> STREAM[getConversationsUseCase Flow]
+    FS[Firestore snapshot listener] -->|writes through| OBX
+    STREAM -->|onStart loading| VM[ConversationsViewModel]
+    STREAM -->|catch error| VM
+    STREAM -->|collect list| VM
+    VM --> P[observeParticipantPresence: combine per-user flows]
+    VM --> A[loadParticipantAvatars: fetch-once]
+    P --> UI[Conversation rows]
+    A --> UI
+    VM --> UI
+```
+
 ## Related
 
 [[Chat and Messaging]] - [[Presence and Typing]] - [[Data Layer]] -
-[[Presentation Layer (MVI)]] - [[Navigation]]
+[[Presentation Layer (MVI)]] - [[Navigation]] - [[Conversations List - Basic Example]]

@@ -85,7 +85,24 @@ resolves it at render time. See [[Presentation Layer (MVI)]] for `UiText`.
 Alternatives (email/password, Google sign-in) are not present in the code; phone-number is the
 only implemented method.
 
+## Visualization
+
+```mermaid
+flowchart TD
+    U[User: phone + code] --> AS[AuthScreen]
+    AS -->|SendVerificationCode| VM[AuthViewModel]
+    VM --> FAS[FirebaseAuthService]
+    FAS -->|verifyPhoneNumber| FB[Firebase Auth]
+    FB -->|CodeSent / AutoVerified| VM
+    VM -->|signInWithCredential| FB
+    FB -->|success| BOOT[Bootstrap: presence online + FCM token]
+    BOOT --> ST[isAuthenticated = true]
+    ST --> NAV{AppNavigation}
+    NAV -->|true| MAIN[MainDisplay]
+    NAV -->|false| LOGIN[AuthDisplay]
+```
+
 ## Related
 
 [[Presentation Layer (MVI)]] - [[Presence and Typing]] - [[Notifications]] - [[Navigation]] -
-[[Data Layer]]
+[[Data Layer]] - [[Authentication - Basic Example]]

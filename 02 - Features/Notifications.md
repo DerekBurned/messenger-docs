@@ -99,7 +99,22 @@ UI hosted by `BubbleActivity`.
 - Splitting call pushes onto the foreground-service path (not a plain notification) is what lets
   a call ring full-screen and integrate with Telecom even from a cold start.
 
+## Visualization
+
+```mermaid
+flowchart TD
+    FCM[FCM push] --> SVC[MyFirebaseMessagingService onMessageReceived]
+    SVC --> T{data type}
+    T -->|message| DEC[Decrypt E2EE]
+    DEC --> PERSIST[persistIncomingMessage to ObjectBox]
+    PERSIST --> OPEN{Conversation open?}
+    OPEN -->|no| NOTE[ChatNotifier MessagingStyle + reply + bubble]
+    OPEN -->|yes| SKIP[Suppress: user is looking at it]
+    T -->|call| CALL[Start CallForegroundService + Telecom]
+```
+
 ## Related
 
 [[Chat and Messaging]] - [[Calls (Voice and Video)]] - [[End-to-End Encryption]] -
-[[Dependency Injection (Hilt)]] - [[Async and Reactivity]] - [[Authentication]]
+[[Dependency Injection (Hilt)]] - [[Async and Reactivity]] - [[Authentication]] -
+[[Notifications - Basic Example]]
