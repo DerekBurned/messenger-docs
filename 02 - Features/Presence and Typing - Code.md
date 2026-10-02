@@ -64,11 +64,21 @@ class RealtimeDbService @Inject constructor(
     fun removePresence(userId: String) { presenceRef.child(userId).removeValue() }
 
     suspend fun setTyping(conversationId: String, userId: String) {
-        typingRef.child(conversationId).child(userId).setValue(mapOf("timestamp" to ServerValue.TIMESTAMP)).await()
+        val ref = typingRef.child(conversationId).child(userId)
+        ref.onDisconnect().removeValue()
+        ref.setValue(mapOf("timestamp" to ServerValue.TIMESTAMP)).await()
     }
 
     suspend fun clearTyping(conversationId: String, userId: String) {
-        typingRef.child(conversationId).child(userId).removeValue().await()
+        val ref = typingRef.child(conversationId).child(userId)
+        ref.onDisconnect().cancel()
+        ref.removeValue().await()
+    }
+
+    fun clearTypingNow(conversationId: String, userId: String) {
+        val ref = typingRef.child(conversationId).child(userId)
+        ref.onDisconnect().cancel()
+        ref.removeValue()
     }
 
     fun observeTyping(conversationId: String): Flow<Map<String, Any?>> = callbackFlow {
@@ -89,8 +99,11 @@ class RealtimeDbService @Inject constructor(
 
 Three `callbackFlow` + `ValueEventListener` reads (connection, presence, typing) that each remove
 their listener on `awaitClose`. `setupOnDisconnect` is the reliability trick: the server writes the
-offline record when the socket drops, so a crash still marks the user offline. Data lives under
-`presence/{uid}` and `typing/{conversationId}/{uid}`.
+offline record when the socket drops, so a crash still marks the user offline. Typing uses the
+same trick - `setTyping` arms `onDisconnect().removeValue()` before writing, so a killed app cannot
+leave a stuck typing node; `clearTyping` cancels that handler, and `clearTypingNow` is a
+fire-and-forget variant (no `await`) for `ChatViewModel.onCleared`, where `viewModelScope` is
+already gone. Data lives under `presence/{uid}` and `typing/{conversationId}/{uid}`.
 
 ---
 
@@ -153,7 +166,11 @@ class FirebaseTypingService @Inject constructor(
     override fun observeTyping(conversationId: String): Flow<Set<String>> =
         realtimeDbService.observeTyping(conversationId).map { data ->
             val currentUserId = firebaseAuth.currentUser?.uid
-            data.keys.filter { it != currentUserId }.toSet()
+            val now = System.currentTimeMillis()
+            data.entries
+                .filter { it.key != currentUserId && isFresh(it.value, now) }
+                .map { it.key }
+                .toSet()
         }
 
     override suspend fun setTyping(conversationId: String) {
@@ -165,8 +182,23 @@ class FirebaseTypingService @Inject constructor(
         val userId = firebaseAuth.currentUser?.uid ?: return
         realtimeDbService.clearTyping(conversationId, userId)
     }
+
+    override fun clearTypingNow(conversationId: String) {
+        val userId = firebaseAuth.currentUser?.uid ?: return
+        realtimeDbService.clearTypingNow(conversationId, userId)
+    }
+
+    private fun isFresh(value: Any?, now: Long): Boolean {
+        val timestamp = (value as? Map<*, *>)?.get("timestamp") as? Number ?: return true
+        return now - timestamp.toLong() <= TYPING_STALE_MS
+    }
+
+    private companion object { const val TYPING_STALE_MS = 15_000L }
 }
 ```
+
+`observeTyping` now filters stale nodes by their `timestamp` (15s window) in addition to dropping
+the current user, so a legacy stuck entry self-heals on the reader even without a disconnect.
 
 ---
 

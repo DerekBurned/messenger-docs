@@ -12,18 +12,19 @@ tags:
 ## Складові (`data/crypto/`)
 
 - `ConversationCrypto` (`ConversationCrypto.kt:13`) - шар примітивів (ECDH, HKDF, AES-GCM).
-- `E2eeMessageCodec` (`E2eeMessageCodec.kt:14`) - encode/decode `Message` у/з `RemoteMessageDto`.
+- `E2eeMessageCodec` (`E2eeMessageCodec.kt:18`) - encode/decode `Message` у/з `RemoteMessageDto`.
 - `IdentityKeyStore` - довготривала пара ключів ідентичності X25519 цього пристрою, епоха й
   обгортання приватного ключа.
 - `KeyWrapper` / `KeystoreKeyWrapper` - обгортання приватного ключа сховищем Android Keystore у
   спокої.
-- `PeerKeyRegistry` (`PeerKeyRegistry.kt:15`) - публікація/отримання/кешування публічних ключів
+- `PeerKeyRegistry` (`PeerKeyRegistry.kt:14`) - публікація/отримання/кешування публічних ключів
   пірінгів.
 - `E2eeBootstrap` (`E2eeBootstrap.kt:12`) - публікує ключ цього пристрою під час запуску.
 - `ParticipantResolver` / `ObxParticipantResolver` - резолвить uid пірінга для розмови.
 - `MediaCipher` - шифрування медіа на файл.
 - `SafetyNumber` (`SafetyNumber.kt:6`) - порівнюваний відбиток двох ключів ідентичності.
-- `MessageEnvelope` / типи навантаження - форма серіалізованого відкритого тексту.
+- `MessagePayload` / `MediaSecret` / `ClipSecret` (`data/crypto/model/`) - форма серіалізованого
+  відкритого тексту.
 
 Обв'язка DI - у `di/CryptoModule.kt` (див. [[Dependency Injection (Hilt)_UA|Впровадження залежностей (Hilt)]]).
 
@@ -59,10 +60,10 @@ val blob = ConversationCrypto.encrypt(key, json.encodeToString(payload).toByteAr
 ```
 
 AAD прив'язує шифротекст до id розмови, id повідомлення, відправника й типу
-(`E2eeMessageCodec.kt:55`), тож шифротекст не можна відтворити під іншою ідентичністю повідомлення,
+(`messageAad`, `CryptoEncoding.kt:3`; викликається в `E2eeMessageCodec.kt:71`), тож шифротекст не можна відтворити під іншою ідентичністю повідомлення,
 не провалюючи перевірку GCM-тегу.
 
-## Кодування повідомлення (`E2eeMessageCodec.encode`, `E2eeMessageCodec.kt:29`)
+## Кодування повідомлення (`E2eeMessageCodec.encode`, `E2eeMessageCodec.kt:38`)
 
 Мета: продукувати `RemoteMessageDto`, що несе шифротекст замість відкритого тексту, коли розмова
 піддається шифруванню, і граційно відкочуватися до відкритого тексту, коли ні.
@@ -72,40 +73,41 @@ AAD прив'язує шифротекст до id розмови, id повід
 2. Резолвить пірінга (`ParticipantResolver.partnerOf`) і забезпечує публічний ключ пірінга
    (`peerKeyRegistry.ensurePeerKey`); якщо будь-що відсутнє, надсилає відкритий текст - хіба що
    повідомлення вже має зашифроване медіа, у такому разі відмовляється надіслати "покинутий"
-   відкритий текст (`plainOrFail`, `:70`).
+   відкритий текст (`plainOrFail`, `:87`).
 3. Будує `MessagePayload` (текст + сніпет відповіді + `MediaSecret`-ключі файлів по елементах),
    деривує ключ розмови й шифрує JSON-навантаження.
 4. Повертає DTO з очищеними полями відкритого тексту й `enc = 1`, `ciphertext`, `nonce`,
    `senderEpoch`, `recipientEpoch`, `recipientId`. BlurHash'і теж прибираються з відкритого боку й
    несуться всередині зашифрованого навантаження.
 
-## Декодування (`E2eeMessageCodec.decode`, `E2eeMessageCodec.kt:77`)
+## Декодування (`E2eeMessageCodec.decode`, `E2eeMessageCodec.kt:94`)
 
-Якщо `enc != 1`, декодує як відкритий текст. Інакше `decryptPayload` (`:94`) визначає, які епохи
+Якщо `enc != 1`, декодує як відкритий текст. Інакше `decryptPayload` (`:129`) визначає, які епохи
 застосовуються, залежно від того, чи цей пристрій - відправник, чи отримувач, завантажує відповідний
 ключ пірінга (`cachedPeerKey`, потім `peerKeyForEpoch`), деривує ключ і розшифровує. Якщо щось
 провалюється (відсутній ключ, неправильна епоха, розбіжність тегу), він повертає плейсхолдер
-`undecryptable` ("Encrypted message", `UNDECRYPTABLE_TEXT`, `:124`), а не кидає виняток - UI показує
+`undecryptable` (`:169`; "Message cannot be decrypted on this device", `UNDECRYPTABLE_TEXT`,
+`:181`), а не кидає виняток - UI показує
 плейсхолдер замість краху.
 
 ## Реєстр ключів пірінгів та епохи
 
-`PeerKeyRegistry` (`PeerKeyRegistry.kt:15`) зберігає публічні ключі кожного користувача під Firestore
+`PeerKeyRegistry` (`PeerKeyRegistry.kt:14`) зберігає публічні ключі кожного користувача під Firestore
 `users/{uid}/keys/{epoch}` і кешує їх локально як рядки `ObxPeerKey` (унікальні за `"uid:epoch"`,
-`data/local/obx/ObxEntities.kt:107`).
-- `publishIfNeeded` (`:21`) вивантажує публічний ключ/епоху цього пристрою, якщо віддалена копія
+`data/local/obx/ObxPeerKey.kt:10`).
+- `publishIfNeeded` (`PeerKeyRegistry.kt:20`) вивантажує публічний ключ/епоху цього пристрою, якщо віддалена копія
   відрізняється.
-- `ensurePeerKey` (`:37`) повертає кешований ключ, коли свіжий (< 30 хв, `REFRESH_MS`), інакше
+- `ensurePeerKey` (`:64`) повертає кешований ключ, коли свіжий (< 30 хв, `REFRESH_MS`), інакше
   отримує останню епоху з Firestore і зберігає її.
-- `peerKeyForEpoch` (`:51`) отримує конкретну історичну епоху, тож старі повідомлення лишаються
+- `peerKeyForEpoch` (`:78`) отримує конкретну історичну епоху, тож старі повідомлення лишаються
   розшифровними після ротації.
-- `setVerified` (`:63`) позначає ключ пірінга верифікованим (використовується верифікацією
+- `setVerified` (`:90`) позначає ключ пірінга верифікованим (використовується верифікацією
   safety-number).
 
 Епохи - це механізм ротації: новий ключ ідентичності означає нову епоху; ключі зберігаються по
 епохах, тож перекеювання не ламає історію. Публікацію під час запуску керує `E2eeBootstrap`
 (`E2eeBootstrap.kt:19`), який на власному `@Singleton` IO-scope викликає `publishIfNeeded` з
-`MessengerApplication.onCreate` (`MessengerApplication.kt:102`).
+`MessengerApplication.onCreate` (`MessengerApplication.kt:108`).
 
 ## Ключі ідентичності у спокої
 
@@ -117,10 +119,10 @@ Keystore, тож він не зберігається у відкритому в
 ## Шифрування медіа
 
 Коли розмова піддається шифруванню, `MediaRepositoryImpl.uploadAndSend`
-(`data/repository/MediaRepositoryImpl.kt:176`) генерує ключ на файл через
+(`data/repository/MediaRepositoryImpl.kt:148`) генерує ключ на файл через
 `MediaCipher.generateFileKey()`, шифрує файл перед завантаженням і кладе ключ у `MediaSecret`-
 навантаження повідомлення (тож він сам E2E-захищений). Завантаження розшифровує тим ключем
-(`downloadMedia`, `:75`). Див. [[Chat and Messaging_UA|Чат і обмін повідомленнями]].
+(`downloadMedia`, `:72`). Див. [[Chat and Messaging_UA|Чат і обмін повідомленнями]].
 
 ## Safety numbers
 
@@ -151,6 +153,7 @@ Keystore, тож він не зберігається у відкритому в
 
 ## Пов'язане
 
+[[End-to-End Encryption - Explained Simply_UA|Наскрізне шифрування - Простими словами]] (версія для початківців з аналогіями, покроковим прикладом і схемами Mermaid) -
 [[Chat and Messaging_UA|Чат і обмін повідомленнями]] - [[Data Layer_UA|Шар даних]] -
 [[Dependency Injection (Hilt)_UA|Впровадження залежностей (Hilt)]] - [[Settings_UA|Налаштування]] -
 [[Notifications_UA|Сповіщення]] - [[Async and Reactivity_UA|Асинхронність і реактивність]]

@@ -343,11 +343,13 @@ class CallForegroundService : Service() {
 
     private fun stopSelfClean() {
         // cancel EVERY job, stop ringback, leave channel, release audio focus,
-        // ActiveCallHolder.clear(), mark Telecom disconnected, stopForeground, stopSelf()
+        // ActiveCallHolder.clear(), ActiveConnectionHolder.disconnect(callId, cause), stopForeground, stopSelf()
     }
 
     override fun onDestroy() {
         stopTicker(); stopRingback(); releaseAudioFocus()
+        ActiveConnectionHolder.disconnectAll(DisconnectCause.LOCAL)  // no stray system call
+        ActiveCallHolder.clear()
         callService.clearEventListener(eventListener)
         scope.coroutineContext[Job]?.cancel()   // nothing outlives the service
         super.onDestroy()
@@ -357,9 +359,13 @@ class CallForegroundService : Service() {
 
 Everything runs on `scope = SupervisorJob() + Dispatchers.IO`; the named timeout jobs (ring 60s,
 requesting 30s, outgoing 65s, reconnect 20s) make each call edge case deterministic;
-`stopSelfClean` and `onDestroy` guarantee no job leaks. The full handler bodies
-(`handleStartOutgoing`, `handleStartIncoming`, `handleAccept`, `terminate`, notification builders,
-audio focus, ringback, presence tracking) are in the source and narrated in
+`stopSelfClean` and `onDestroy` guarantee no job - and no leaked Telecom connection - outlives the
+service (see the race-proof `ActiveConnectionHolder` in [[Calls (Voice and Video)]]). The ongoing
+in-call notification is `buildOngoingNotification` (`:803`), which uses
+`NotificationCompat.CallStyle.forOngoingCall(person, hangUpIntent)` on API 31+ (a persistent
+system in-call notification with an End action) and a plain builder below that. The full handler
+bodies (`handleStartOutgoing`, `handleStartIncoming`, `handleAccept`, `terminate`, notification
+builders, audio focus, ringback, presence tracking) are in the source and narrated in
 [[Calls (Voice and Video)]].
 
 ---

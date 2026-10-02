@@ -62,6 +62,8 @@ Every feature has an "Explained Simply" companion:
 - [[Authentication]] - phone-number OTP sign-in, account linking, session bootstrap.
 - [[Conversations List]] - the chat list, offline-first stream, per-participant presence and
   avatars, delete-for-me vs delete-for-everyone.
+- [[Search and Suggestions]] - the tab-bar search field expand animation, back-gesture close, and
+  the "Recently searched" / "Recently opened" result suggestions backed by a recents store.
 - [[Chat and Messaging]] - send/receive, replies, media attachments, read receipts, paging,
   message deletion rules.
 - [[Calls (Voice and Video)]] - Agora RTC, the foreground-service call state machine, the

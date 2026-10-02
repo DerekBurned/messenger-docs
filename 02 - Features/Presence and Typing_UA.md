@@ -39,7 +39,7 @@ heartbeat не потрібно. `cancelOnDisconnect` очищає це при �
 
 `PresenceManager` (`data/presence/PresenceManager.kt:16`, `@Singleton`) перетворює події життєвого
 циклу на записи присутності через конфлюючий канал (`transitions: Channel<PresenceState>`, `:24`).
-Збирач (`ensureCollector`, `:75`) застосовує кожен запитаний стан через
+Збирач (`ensureCollector`, `:77`) застосовує кожен запитаний стан через
 `presenceService.setMyPresence(state)`, пропускаючи no-op повтори (`lastAppliedState`), і викликає
 `setupOnDisconnect` при переході в ONLINE.
 
@@ -53,7 +53,7 @@ heartbeat не потрібно. `cancelOnDisconnect` очищає це при �
 застосуванням, уникаючи бурі записів RTDB на швидких перемиканнях foreground/background. Менеджер
 викликається `AuthViewModel` при вході/виході (`goOnline`/`disconnect`, див.
 [[Authentication_UA|Автентифікація]]) та `AppLifecycleObserver` при foreground/background процесу,
-зв'язаний у `MessengerApplication.onCreate` (`MessengerApplication.kt:95`). Переданий scope - це
+зв'язаний у `MessengerApplication.onCreate` (`MessengerApplication.kt:101`). Переданий scope - це
 scope викликача (`viewModelScope` з auth, або scope спостерігача), тож менеджер ніколи не володіє
 власним scope.
 
@@ -63,33 +63,48 @@ scope викликача (`viewModelScope` з auth, або scope спостер�
 `ValueEventListener` у `UserPresence(state, lastSeen)`. `observeMultiplePresence` (`:30`)
 `combine`-ить список потоків по користувачах в єдиний `Map<String, UserPresence>` - використовується
 списком розмов, щоб підсвітити кожен рядок (див. [[Conversations List_UA|Список розмов]]). У чаті
-`ChatViewModel.observePartnerPresence` (`presentation/viewmodel/ChatViewModel.kt:283`) `combine`-ить
+`ChatViewModel.observePartnerPresence` (`presentation/viewmodel/ChatViewModel.kt:400`) `combine`-ить
 потік присутності з 60-секундним ticker, тож напис "останній раз у мережі N хвилин тому"
 оновлюється, навіть коли присутність сама не змінилася. Прибирання `callbackFlow` + `awaitClose` в
 [[Async and Reactivity_UA|Асинхронність і реактивність]].
 
 ## Набір тексту
 
-Набір записується під `typing/{conversationId}/{uid}` у RTDB.
-- Вихідний: `ChatViewModel.onTextChanged` (`presentation/viewmodel/ChatViewModel.kt:324`) дебаунсить
+Набір записується під `typing/{conversationId}/{uid}` у RTDB. Як і присутність, вузол
+самоочищується: він прибирається, чи то користувач виходить з чату, згортає застосунок, чи процес
+убито - тож співрозмовник ніколи не бачить назавжди застряглий "набирає...".
+
+- Вихідний: `ChatViewModel.onTextChanged` (`presentation/viewmodel/ChatViewModel.kt:445`) дебаунсить
   500 мс перед `typingService.setTyping`, із 5-секундним TTL-очищенням та миттєвим очищенням при
-  порожньому вводі. `FirebaseTypingService.setTyping` (`FirebaseTypingService.kt:24`) пише вузол
+  порожньому вводі. `FirebaseTypingService.setTyping` (`FirebaseTypingService.kt:28`) пише вузол
   timestamp для поточного користувача.
+- Самоочищення при розриві сокета: `RealtimeDbService.setTyping` (`RealtimeDbService.kt:79`)
+  реєструє `onDisconnect().removeValue()` на вузлі *перед* записом, дзеркалячи `setupOnDisconnect`
+  для присутності. Збій, втрата мережі чи вбивство процесу змушують сервер Firebase прибрати вузол
+  набору. `clearTyping` (`:85`) скасовує цей обробник перед видаленням вузла при чистому очищенні.
+- Очищення при виході з екрана: `ChatViewModel.onCleared` (`ChatViewModel.kt:561`) викликає
+  несуспендний `typingService.clearTypingNow` (`FirebaseTypingService.kt:38` ->
+  `RealtimeDbService.kt:91`). `viewModelScope` там уже скасовано, тож очищення не може бути
+  suspend-викликом у ньому; `clearTypingNow` виконує `removeValue()` без очікування й скасовує
+  обробник розриву. Це покриває вихід із чату, коли застосунок лишається під'єднаним - випадок, де
+  `onDisconnect` ніколи б не спрацював.
 - Вхідний: `FirebaseTypingService.observeTyping` (`FirebaseTypingService.kt:17`) маппить дочірні
-  вузли RTDB у множину uid, що набирають, і відфільтровує поточного користувача:
+  вузли RTDB у множину uid, що набирають, відфільтровує поточного користувача й захисно відкидає
+  будь-який вузол, чий `timestamp` старший за 15 с (`isFresh`, `:43`) - страховка для застарілих
+  записів з часів до самоочищення:
   ```kotlin
-  realtimeDbService.observeTyping(conversationId).map { data ->
-      val currentUserId = firebaseAuth.currentUser?.uid
-      data.keys.filter { it != currentUserId }.toSet()
-  }
+  data.entries
+      .filter { it.key != currentUserId && isFresh(it.value, now) }
+      .map { it.key }
+      .toSet()
   ```
-  `ChatViewModel.observeTyping` (`ChatViewModel.kt:309`) збирає це в `isPartnerTyping` /
-  `typingUsernames`, відрендерене `TypingIndicator`.
+  `ChatViewModel.observeTyping` (`ChatViewModel.kt:430`) збирає це в `isPartnerTyping` /
+  `typingUsernames`, показане як напис "набирає..." у шапці чату.
 
 ## Чому Realtime Database (а не Firestore) для цього
 
-- `onDisconnect()` дає серверне визначення офлайн безкоштовно, чого Firestore не пропонує - критично,
-  щоб убитий застосунок усе одно показувався офлайн.
+- `onDisconnect()` дає серверне очищення безкоштовно, чого Firestore не пропонує - критично, щоб
+  убитий застосунок усе одно показувався офлайн *і* припиняв показувати застарілий індикатор набору.
 - Присутність і набір - це високочастотні, крихітні, ефемерні записи; модель RTDB для цього дешевша
   й з нижчою затримкою, ніж записи документів Firestore.
 - Firestore лишається сховищем запису для повідомлень і розмов; RTDB використовується лише для

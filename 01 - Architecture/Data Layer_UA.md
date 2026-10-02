@@ -26,37 +26,44 @@ Agora, crypto-кодека, передавання медіа та ОС. Сам�
 ## Сховище ObjectBox
 
 Версія `5.4.2` (`gradle/libs.versions.toml:16`), обробка анотацій через kapt
-(`app/build.gradle.kts:10`, `:163`). Сутності оголошені в `data/local/obx/ObxEntities.kt` і
-генеруються в `MyObjectBox`.
+(`app/build.gradle.kts:10`, `:11`). Сутності оголошені по одній на файл у `data/local/obx/`
+(`ObxMessage.kt`, `ObxConversation.kt`, `ObxUser.kt`, `ObxRecentContact.kt`, `ObxSyncQueueItem.kt`,
+...) і генеруються в `MyObjectBox`.
 
-Домовленості сутностей (`data/local/obx/ObxEntities.kt:14`): `@Id var boxId: Long` - внутрішній
+Домовленості сутностей (`data/local/obx/ObxMessage.kt:14`): `@Id var boxId: Long` - внутрішній
 ключ; бізнес-ключ - це окремий `@Unique(onConflict = ConflictStrategy.REPLACE) var uid`, тож
 upsert того самого віддаленого id замінює рядок, а не дублює його. Стовпці, "гарячі" для запитів,
 несуть `@Index` - `ObxMessage.conversationId` та `ObxMessage.type`
-(`ObxEntities.kt:23`, `:26`); індекс `type` існує, щоб запит історії дзвінків (`type.oneOf(...)`)
+(`ObxMessage.kt:16`, `:24`); індекс `type` існує, щоб запит історії дзвінків (`type.oneOf(...)`)
 не був повним скануванням таблиці. Складні поля зберігаються через `@Convert` property-конвертери
 (наприклад `MediaItemListConverter` для `mediaItemsJson`, `PhoneNumberConverter`,
 `StringListConverter`), тож `List<MediaItem>` зберігається як JSON в одному стовпці.
 
-Сім боксів постачаються як singleton у `di/ObjectBoxModule.kt`: `provideBoxStore`
-(`di/ObjectBoxModule.kt:29`) будує `MyObjectBox` і лише в debug відновлюється після
+Вісім боксів постачаються як singleton у `di/ObjectBoxModule.kt`: `provideBoxStore`
+(`di/ObjectBoxModule.kt:30`) будує `MyObjectBox` і лише в debug відновлюється після
 `DbSchemaException`, витираючи й перебудовуючи сховище - пониження схеми на dev-пристрої
 самовиправляється замість краху під час запуску. Кожен `Box<Obx*>` - окремий
 `@Provides @Singleton`, тож репозиторії впроваджують саме ті бокси, які їм потрібні.
+
+`ObxRecentContact` (`data/local/obx/ObxRecentContact.kt:9`) забезпечує списки підказок пошуку: один рядок
+на контакт за унікальним `@Unique userId`, з полями `username`, `avatarUrl` і двома мітками часу
+`lastSearchedAt` / `lastOpenedAt`. Запис пошуку чи відкриття чату оновлює (upsert) рядок,
+змінюючи одну мітку часу, тож одна й та сама людина ніколи не дублюється між двома секціями підказок.
 
 Потокування з ObjectBox використовує розширення `Query<T>.asFlow()`
 (`data/local/obx/ObxFlow.kt:8`); його прибирання `callbackFlow` + `awaitClose` розібрано в
 [[Async and Reactivity_UA|Асинхронність і реактивність]].
 
-Маппери живуть у `data/local/obx/ObxMappers.kt` (`toObx()` / `toDomain()`), тримаючи анотації
-ObjectBox поза доменними моделями.
+Маппери живуть у `data/local/obx/mappers/` (`ObxMessageMappers.kt`, `ObxConversationMappers.kt`,
+`ObxUserMappers.kt`; `toObx()` / `toDomain()`), тримаючи анотації ObjectBox поза доменними
+моделями.
 
 ## Репозиторії
 
 `data/repository/` (усі `@Singleton`, прив'язані в `di/RepositoryModule.kt`):
 - `MessageRepositoryImpl` (`IMessageRepository`) - локальний потік + send/delete/read + оновлення
   Firestore + пагінація + злиття зі збереженням стану прочитання (`putPreservingReadState`,
-  `data/repository/MessageRepositoryImpl.kt:169`). Правила видалення пояснено в
+  `data/repository/MessageRepositoryImpl.kt:178`). Правила видалення пояснено в
   [[Chat and Messaging_UA|Чат і обмін повідомленнями]].
 - `MediaRepositoryImpl` (`IMediaRepository`) - володіє власним scope рівня застосунку для
   завантажень/вивантажень; див. [[Chat and Messaging_UA|Чат і обмін повідомленнями]] та
@@ -68,7 +75,12 @@ ObjectBox поза доменними моделями.
 - `AuthRepositoryImpl` (`IAuthRepository`) - обгортка над `FirebaseAuthService`.
 - `SyncRepositoryImpl` (`ISyncRepository`) - осушує чергу синхронізації.
 - `CallHistoryRepository` - записи журналу дзвінків, похідні від повідомлень типу дзвінка
-  (`data/repository/CallHistoryRepository.kt:24`); див. [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]].
+  (`data/repository/CallHistoryRepository.kt:20`); див. [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]].
+- `RecentContactsRepository` (`data/repository/RecentContactsRepository.kt`) - простий
+  box-орієнтований `@Singleton` (тієї ж форми, що й `CallHistoryRepository`, без інтерфейсу), що
+  читає/пише `ObxRecentContact`. Надає `recordSearched` / `recordOpened` (upsert-и на IO-диспетчері)
+  та два реактивні читання на базі `queryFlow` - `observeRecentSearched` / `observeRecentOpened`,
+  зіставлені в `List<User>`. Живить секції "Нещодавно шукані" / "Нещодавно відкриті" в оверлеї пошуку.
 - `ConversationReconciler` - узгоджує віддалені знімки розмов із локальними рядками.
 
 `data/local/repository/LocalRepositoryImpl` (`ILocalRepository`) централізує прямий доступ до
@@ -81,14 +93,14 @@ BOM `34.10.0` (`gradle/libs.versions.toml:13`) керує версіями Fireb
 
 - `FirestoreService` (`data/remote/firebase/FirestoreService.kt`) - користувачі, розмови й
   підколекція `conversations/{id}/messages`. Читання - це `callbackFlow` зі snapshot listener
-  (`getRecentMessagesStream:204`, `getAllConversations:422`); записи - suspend-методи `Result`, що
+  (`getRecentMessagesStream:251`, `getAllConversations:493`); записи - suspend-методи `Result`, що
   використовують `await()` з `kotlinx-coroutines-play-services`. Він інтегрує E2EE-кодек під час
-  encode/decode. Видалення для всіх встановлює поле `deleted` (`:173`); видалення для себе додає
-  uid у масив `deletedFor` (`:145`); очищення розмови записує `clearedAt.{uid}` і прибирає uid з
-  `visibleTo` (`:373`).
+  encode/decode. Видалення для всіх встановлює поле `deleted` (`:226`); видалення для себе додає
+  uid у масив `deletedFor` (`:199`); очищення розмови записує `clearedAt.{uid}` і прибирає uid з
+  `visibleTo` (`:453`).
 - `RealtimeDbService` (`data/remote/firebase/RealtimeDbService.kt`) - присутність, набір і
   `.info/connected`. Присутність використовує `onDisconnect()`, тож сервер позначає користувача
-  офлайн, якщо сокет обірветься (`:46`). Читання - це `callbackFlow` з `ValueEventListener`.
+  офлайн, якщо сокет обірветься (`:52`). Читання - це `callbackFlow` з `ValueEventListener`.
 - `FirebaseStorageService` - URL завантаження/вивантаження медіа (використовує
   `MediaTransferManager`).
 - `FirebaseMessagingManager` / `MyFirebaseMessagingService` / `FcmTokenSyncer` - FCM; див.
@@ -103,7 +115,8 @@ BOM `34.10.0` (`gradle/libs.versions.toml:13`) керує версіями Fireb
 
 ## DTO та маппери
 
-`data/remote/dto/` містить провідні (wire) типи Firestore: `RemoteMessageDto` (з `MessageDTO.kt`),
+`data/remote/dto/` містить провідні (wire) типи Firestore: `RemoteMessageDto` (у `dto/message/RemoteMessageDto.kt`,
+поруч із `RemoteMediaItemDto` і `RemoteClipDto`),
 `ConversationDTO`, `UserDTO`, `CallSignalDto`. Розширення-маппери `toDomain()` / `toRemoteDto()`
 конвертують у доменні моделі й назад і несуть поля шифрування (`enc`, `ciphertext`, `nonce`,
 `senderEpoch`, `recipientEpoch`, `recipientId`), які читає/пише кодек. DTO також несе `deletedFor`
@@ -123,9 +136,9 @@ BOM `34.10.0` (`gradle/libs.versions.toml:13`) керує версіями Fireb
   `SyncAllDataUseCase` і повертає `Result.retry()` за збою, тож WorkManager відкладає повтор.
 - `NetworkObserver` / `INetworkObserver` - Flow зв'язності, який використовує координатор.
 
-`@HiltWorker` потребує `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:142`) і
+`@HiltWorker` потребує `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:139`) і
 `HiltWorkerFactory`, зв'язаного через `MessengerApplication` `Configuration.Provider`
-(`MessengerApplication.kt:134`); інакше WorkManager не може сконструювати воркер із його
+(`MessengerApplication.kt:140`); інакше WorkManager не може сконструювати воркер із його
 залежністю `SyncAllDataUseCase`.
 
 ## Передавання й кешування медіа

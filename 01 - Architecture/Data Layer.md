@@ -24,38 +24,45 @@ model: `messageBox.put(...)` then `updateConversationPreview` then
 ## ObjectBox persistence
 
 Version `5.4.2` (`gradle/libs.versions.toml:16`), annotation processing via kapt
-(`app/build.gradle.kts:10`, `:163`). Entities are declared in
-`data/local/obx/ObxEntities.kt` and generated into `MyObjectBox`.
+(`app/build.gradle.kts:10`, `:11`). Entities are declared one per file in `data/local/obx/`
+(`ObxMessage.kt`, `ObxConversation.kt`, `ObxUser.kt`, `ObxRecentContact.kt`, `ObxSyncQueueItem.kt`,
+...) and generated into `MyObjectBox`.
 
-Entity conventions (`data/local/obx/ObxEntities.kt:14`): `@Id var boxId: Long` is the internal
+Entity conventions (`data/local/obx/ObxMessage.kt:14`): `@Id var boxId: Long` is the internal
 key; the business key is a separate `@Unique(onConflict = ConflictStrategy.REPLACE) var uid`,
 so an upsert of the same remote id replaces the row rather than duplicating it. Query-hot
 columns carry `@Index` - `ObxMessage.conversationId` and `ObxMessage.type`
-(`ObxEntities.kt:23`, `:26`); the `type` index exists so the call-history query
+(`ObxMessage.kt:16`, `:24`); the `type` index exists so the call-history query
 (`type.oneOf(...)`) is not a full-table scan. Complex fields are stored via `@Convert`
 property converters (for example `MediaItemListConverter` for `mediaItemsJson`,
 `PhoneNumberConverter`, `StringListConverter`), so a `List<MediaItem>` persists as JSON in one
 column.
 
-The seven boxes are provided as singletons in `di/ObjectBoxModule.kt`: `provideBoxStore`
-(`di/ObjectBoxModule.kt:29`) builds `MyObjectBox` and, in debug only, recovers from a
+The eight boxes are provided as singletons in `di/ObjectBoxModule.kt`: `provideBoxStore`
+(`di/ObjectBoxModule.kt:30`) builds `MyObjectBox` and, in debug only, recovers from a
 `DbSchemaException` by wiping and rebuilding the store - a schema downgrade on a dev device
 auto-heals instead of crashing on launch. Each `Box<Obx*>` is a separate `@Provides @Singleton`
 so repositories inject exactly the boxes they need.
+
+`ObxRecentContact` (`data/local/obx/ObxRecentContact.kt:9`) backs the search-suggestion lists: one row
+per contact keyed on a `@Unique userId`, carrying `username`, `avatarUrl`, and two timestamps
+`lastSearchedAt` / `lastOpenedAt`. Recording a search or a chat-open upserts the row (updating one
+timestamp), so the same person is never duplicated across the two suggestion sections.
 
 Streaming from ObjectBox uses the `Query<T>.asFlow()` extension
 (`data/local/obx/ObxFlow.kt:8`); its `callbackFlow` + `awaitClose` cleanup is dissected in
 [[Async and Reactivity]].
 
-Mappers live in `data/local/obx/ObxMappers.kt` (`toObx()` / `toDomain()`), keeping ObjectBox
-annotations out of the domain models.
+Mappers live in `data/local/obx/mappers/` (`ObxMessageMappers.kt`, `ObxConversationMappers.kt`,
+`ObxUserMappers.kt`; `toObx()` / `toDomain()`), keeping ObjectBox annotations out of the domain
+models.
 
 ## Repositories
 
 `data/repository/` (all `@Singleton`, bound in `di/RepositoryModule.kt`):
 - `MessageRepositoryImpl` (`IMessageRepository`) - local stream + send/delete/read + Firestore
   refresh + paging + read-state-preserving merge (`putPreservingReadState`,
-  `data/repository/MessageRepositoryImpl.kt:169`). Delete rules explained in
+  `data/repository/MessageRepositoryImpl.kt:178`). Delete rules explained in
   [[Chat and Messaging]].
 - `MediaRepositoryImpl` (`IMediaRepository`) - owns its own app-scoped coroutine scope for
   uploads/downloads; see [[Chat and Messaging]] and the scope rationale in
@@ -67,7 +74,12 @@ annotations out of the domain models.
 - `AuthRepositoryImpl` (`IAuthRepository`) - wraps `FirebaseAuthService`.
 - `SyncRepositoryImpl` (`ISyncRepository`) - drains the sync queue.
 - `CallHistoryRepository` - call-log entries derived from call-type messages
-  (`data/repository/CallHistoryRepository.kt:24`); see [[Calls (Voice and Video)]].
+  (`data/repository/CallHistoryRepository.kt:20`); see [[Calls (Voice and Video)]].
+- `RecentContactsRepository` (`data/repository/RecentContactsRepository.kt`) - a plain
+  box-backed `@Singleton` (same shape as `CallHistoryRepository`, no interface) reading/writing
+  `ObxRecentContact`. Exposes `recordSearched` / `recordOpened` (IO-dispatched upserts) and two
+  reactive `queryFlow`-backed reads `observeRecentSearched` / `observeRecentOpened`, mapped to
+  `List<User>`. Powers the search overlay's "Recently searched" / "Recently opened" sections.
 - `ConversationReconciler` - reconciles remote conversation snapshots against local rows.
 
 `data/local/repository/LocalRepositoryImpl` (`ILocalRepository`) centralizes direct box access
@@ -80,14 +92,14 @@ SDKs and return domain types / `Result`.
 
 - `FirestoreService` (`data/remote/firebase/FirestoreService.kt`) - users, conversations, and
   the `conversations/{id}/messages` subcollection. Reads are snapshot-listener `callbackFlow`s
-  (`getRecentMessagesStream:204`, `getAllConversations:422`); writes are suspend `Result`
+  (`getRecentMessagesStream:251`, `getAllConversations:493`); writes are suspend `Result`
   methods using `kotlinx-coroutines-play-services` `await()`. It integrates the E2EE codec on
-  encode/decode. Delete-for-everyone sets the `deleted` field (`:173`); delete-for-me adds the
-  uid to a `deletedFor` array (`:145`); clearing a conversation writes `clearedAt.{uid}` and
-  removes the uid from `visibleTo` (`:373`).
+  encode/decode. Delete-for-everyone sets the `deleted` field (`:226`); delete-for-me adds the
+  uid to a `deletedFor` array (`:199`); clearing a conversation writes `clearedAt.{uid}` and
+  removes the uid from `visibleTo` (`:453`).
 - `RealtimeDbService` (`data/remote/firebase/RealtimeDbService.kt`) - presence, typing, and
   `.info/connected`. Presence uses `onDisconnect()` so the server marks a user offline if the
-  socket drops (`:46`). Reads are `ValueEventListener` `callbackFlow`s.
+  socket drops (`:52`). Reads are `ValueEventListener` `callbackFlow`s.
 - `FirebaseStorageService` - media upload/download URLs (used by `MediaTransferManager`).
 - `FirebaseMessagingManager` / `MyFirebaseMessagingService` / `FcmTokenSyncer` - FCM; see
   [[Notifications]].
@@ -99,7 +111,8 @@ domain interfaces and filter out the current user; see [[Presence and Typing]].
 
 ## DTOs and mappers
 
-`data/remote/dto/` holds the Firestore wire types: `RemoteMessageDto` (with `MessageDTO.kt`),
+`data/remote/dto/` holds the Firestore wire types: `RemoteMessageDto` (in `dto/message/RemoteMessageDto.kt`,
+next to `RemoteMediaItemDto` and `RemoteClipDto`),
 `ConversationDTO`, `UserDTO`, `CallSignalDto`. Extension mappers `toDomain()` / `toRemoteDto()`
 convert to and from domain models, and carry the encryption fields (`enc`, `ciphertext`,
 `nonce`, `senderEpoch`, `recipientEpoch`, `recipientId`) that the codec reads/writes. The DTO
@@ -120,9 +133,9 @@ When a write cannot reach Firestore, the repository enqueues an `ObxSyncQueueIte
   to `SyncAllDataUseCase` and returns `Result.retry()` on failure so WorkManager backs off.
 - `NetworkObserver` / `INetworkObserver` - a Flow of connectivity used by the coordinator.
 
-`@HiltWorker` needs `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:142`) and the
+`@HiltWorker` needs `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:139`) and the
 `HiltWorkerFactory` wired via `MessengerApplication` `Configuration.Provider`
-(`MessengerApplication.kt:134`); otherwise WorkManager cannot construct the worker with its
+(`MessengerApplication.kt:140`); otherwise WorkManager cannot construct the worker with its
 `SyncAllDataUseCase` dependency.
 
 ## Media transfer and cache

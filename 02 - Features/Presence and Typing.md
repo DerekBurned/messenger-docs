@@ -36,7 +36,7 @@ needed. `cancelOnDisconnect` clears it on a clean logout.
 
 `PresenceManager` (`data/presence/PresenceManager.kt:16`, `@Singleton`) turns lifecycle events
 into presence writes through a conflated channel (`transitions: Channel<PresenceState>`,
-`:24`). The collector (`ensureCollector`, `:75`) applies each requested state via
+`:24`). The collector (`ensureCollector`, `:77`) applies each requested state via
 `presenceService.setMyPresence(state)`, skipping no-op repeats (`lastAppliedState`), and calls
 `setupOnDisconnect` when going ONLINE.
 
@@ -50,7 +50,7 @@ Transitions:
 is applied, avoiding a storm of RTDB writes on quick foreground/background flips. The manager is
 called by `AuthViewModel` on login/logout (`goOnline`/`disconnect`, see [[Authentication]]) and
 by `AppLifecycleObserver` on process foreground/background, wired in
-`MessengerApplication.onCreate` (`MessengerApplication.kt:95`). The scope passed in is the
+`MessengerApplication.onCreate` (`MessengerApplication.kt:101`). The scope passed in is the
 caller's (`viewModelScope` from auth, or the observer's), so the manager never owns a scope of
 its own.
 
@@ -60,33 +60,49 @@ its own.
 `ValueEventListener` flow into a `UserPresence(state, lastSeen)`. `observeMultiplePresence`
 (`:30`) `combine`s a list of per-user flows into a single `Map<String, UserPresence>` - used by
 the conversations list to light up every row (see [[Conversations List]]). In chat,
-`ChatViewModel.observePartnerPresence` (`presentation/viewmodel/ChatViewModel.kt:283`) `combine`s
+`ChatViewModel.observePartnerPresence` (`presentation/viewmodel/ChatViewModel.kt:400`) `combine`s
 the presence flow with a 60s ticker so the "last seen N minutes ago" label keeps refreshing even
 when presence itself has not changed. The underlying `callbackFlow` + `awaitClose` cleanup is in
 [[Async and Reactivity]].
 
 ## Typing
 
-Typing is written under `typing/{conversationId}/{uid}` in RTDB.
-- Outgoing: `ChatViewModel.onTextChanged` (`presentation/viewmodel/ChatViewModel.kt:324`)
+Typing is written under `typing/{conversationId}/{uid}` in RTDB. Like presence, the node
+self-heals: it is cleared whether the user leaves the chat, backgrounds the app, or the process
+is killed, so a partner never gets a permanently stuck "typing...".
+
+- Outgoing: `ChatViewModel.onTextChanged` (`presentation/viewmodel/ChatViewModel.kt:445`)
   debounces 500ms before `typingService.setTyping`, with a 5s TTL clear and an immediate clear
-  on empty input. `FirebaseTypingService.setTyping` (`FirebaseTypingService.kt:24`) writes a
+  on empty input. `FirebaseTypingService.setTyping` (`FirebaseTypingService.kt:28`) writes a
   timestamp node for the current user.
+- Self-heal on socket drop: `RealtimeDbService.setTyping` (`RealtimeDbService.kt:79`) registers
+  `onDisconnect().removeValue()` on the node *before* writing it, mirroring `setupOnDisconnect`
+  for presence. A crash, lost network, or process kill makes the Firebase server remove the
+  typing node. `clearTyping` (`:85`) cancels that handler before removing the node on a clean
+  clear.
+- Leave-the-screen clear: `ChatViewModel.onCleared` (`ChatViewModel.kt:561`) calls the
+  non-suspending `typingService.clearTypingNow` (`FirebaseTypingService.kt:38` ->
+  `RealtimeDbService.kt:91`). `viewModelScope` is already cancelled there, so the clear cannot be
+  a suspend call launched in it; `clearTypingNow` fires `removeValue()` without awaiting and
+  cancels the disconnect handler. This covers navigating out of a chat while the app stays
+  connected - the case where `onDisconnect` would never fire.
 - Incoming: `FirebaseTypingService.observeTyping` (`FirebaseTypingService.kt:17`) maps the RTDB
-  children to the set of typing uids and filters out the current user:
+  children to the set of typing uids, filters out the current user, and defensively drops any
+  node whose `timestamp` is older than 15s (`isFresh`, `:43`) - a belt for legacy stale entries
+  from before the self-heal existed:
   ```kotlin
-  realtimeDbService.observeTyping(conversationId).map { data ->
-      val currentUserId = firebaseAuth.currentUser?.uid
-      data.keys.filter { it != currentUserId }.toSet()
-  }
+  data.entries
+      .filter { it.key != currentUserId && isFresh(it.value, now) }
+      .map { it.key }
+      .toSet()
   ```
-  `ChatViewModel.observeTyping` (`ChatViewModel.kt:309`) collects it into `isPartnerTyping` /
-  `typingUsernames`, rendered by `TypingIndicator`.
+  `ChatViewModel.observeTyping` (`ChatViewModel.kt:430`) collects it into `isPartnerTyping` /
+  `typingUsernames`, shown as the "typing..." label in the chat header.
 
 ## Why Realtime Database (not Firestore) for these
 
-- `onDisconnect()` gives server-side offline detection for free, which Firestore does not offer -
-  essential so a killed app still shows offline.
+- `onDisconnect()` gives server-side cleanup for free, which Firestore does not offer - essential
+  so a killed app still shows offline *and* stops showing a stale typing indicator.
 - Presence and typing are high-frequency, tiny, ephemeral writes; RTDB's model is cheaper and
   lower-latency for that than Firestore document writes.
 - Firestore remains the store of record for messages and conversations; RTDB is used only for
@@ -103,7 +119,9 @@ flowchart TD
     RTDB --> OBS[observePresence callbackFlow]
     OBS --> COMB[combine per-user -> map]
     COMB --> ROWS[Conversation rows + chat header]
-    TXT[Typing: onTextChanged debounce 500ms] --> RTDB
+    TXT[Typing: onTextChanged debounce 500ms] --> TSET[setTyping + onDisconnect removeValue]
+    TSET --> RTDB
+    RTDB -->|server onDisconnect / onCleared clearTypingNow| TCLR[typing node removed]
 ```
 
 ## Related
