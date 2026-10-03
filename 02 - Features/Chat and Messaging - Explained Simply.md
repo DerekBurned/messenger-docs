@@ -21,12 +21,12 @@ mailbox. If the mailbox is jammed, you keep the note flagged "not sent yet" and 
 ## Step by step: sending "hello"
 
 1. You type and hit send. The screen fires `ChatIntent.SendMessage("hello")` -> `sendMessage`
-   (`presentation/viewmodel/ChatViewModel.kt:373`).
+   (`presentation/viewmodel/ChatViewModel.kt:504`).
 
 2. `SendMessageUseCase` builds a `Message.Text` with a fresh id, status `SENDING`, and (if you
    were replying) a short snippet of the original.
 
-3. `MessageRepositoryImpl.sendMessage` (`data/repository/MessageRepositoryImpl.kt:52`):
+3. `MessageRepositoryImpl.sendMessage` (`data/repository/MessageRepositoryImpl.kt:53`):
    - writes it to the ObjectBox notebook. Because the chat screen is reading that notebook as a
      live stream, "hello" pops on screen immediately.
    - then tries Firebase. On success it is delivered; on failure it flips the row to `FAILED` and
@@ -56,7 +56,7 @@ flowchart LR
 
 ## The code, with plain-English comments
 
-Write-local-first (`data/repository/MessageRepositoryImpl.kt:52`):
+Write-local-first (`data/repository/MessageRepositoryImpl.kt:53`):
 
 ```kotlin
 suspend fun sendMessage(message: Message): Result<Unit> {

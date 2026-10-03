@@ -5,8 +5,8 @@ is the largest feature; snippets are copied verbatim from the repo. Conceptual "
 main note.
 
 Files covered:
-- MVI: `presentation/state/ChatUiState.kt`, `presentation/intent/ChatIntent.kt`,
-  `presentation/effect/ChatEffect.kt`
+- MVI: `presentation/state/chat/ChatUiState.kt` (with `PendingAttachment.kt` beside it),
+  `presentation/intent/ChatIntent.kt`, `presentation/effect/ChatEffect.kt`
 - `presentation/viewmodel/ChatViewModel.kt`
 - Use cases `domain/usecase/message/{GetMessageUseCase, SendMessageUseCase}.kt` (others noted)
 - `data/repository/MessageRepositoryImpl.kt`
@@ -18,7 +18,8 @@ Files covered:
 
 ## 1. MVI contract
 
-`ChatUiState.kt`:
+`PendingAttachment.kt` and `ChatUiState.kt` (blank lines between fields dropped; the voice
+fields are covered in [[Voice Messages - Code]]):
 
 ```kotlin
 @Immutable
@@ -33,6 +34,7 @@ data class ChatUiState(
     val partnerPresence: UserPresence = UserPresence(),
     val partnerUsername: String = "",
     val partnerAvatarUrl: String? = null,
+    val partnerDeleted: Boolean = false,
     val typingUsernames: List<String> = emptyList(),
     val isPartnerTyping: Boolean = false,
     val replyingTo: Message? = null,
@@ -47,6 +49,9 @@ data class ChatUiState(
     val transfers: Map<String, MediaTransfer> = emptyMap(),
     val pendingAttachments: List<PendingAttachment> = emptyList(),
     val conversationMedia: List<MediaItem> = emptyList(),
+    val recording: VoiceRecordState = VoiceRecordState.Idle,
+    val voiceDraft: VoiceRecording? = null,
+    val micDenied: Boolean = false,
 ) : UiState
 ```
 
@@ -72,6 +77,19 @@ sealed interface ChatIntent : UiIntent {
     data class AddAttachment(val uri: Uri, val kind: String) : ChatIntent
     data object ClearAttachments : ChatIntent
     data class RetryMedia(val messageId: String) : ChatIntent
+    data object StartRecording : ChatIntent
+    data object LockRecording : ChatIntent
+    data object CancelRecording : ChatIntent
+    data object FinishRecording : ChatIntent
+    data object InterruptRecording : ChatIntent
+    data object SendVoiceDraft : ChatIntent
+    data object DiscardVoiceDraft : ChatIntent
+    data class MicPermissionDenied(val permanently: Boolean) : ChatIntent
+    data object DismissMicPrompt : ChatIntent
+    data class PlayClip(val messageId: String) : ChatIntent
+    data class SeekClip(val fraction: Float) : ChatIntent
+    data class RetryClip(val messageId: String) : ChatIntent
+    data class CancelClipSend(val messageId: String) : ChatIntent
 }
 ```
 
@@ -448,11 +466,7 @@ class SendMessageUseCase @Inject constructor(
                 timestamp = System.currentTimeMillis(),
                 status = MessageStatus.SENDING,
                 replyToMessageId = replyTo?.id,
-                replyToText = when (replyTo) {
-                    is Message.Text  -> replyTo.text.take(REPLY_SNIPPET_MAX)
-                    is Message.Media -> replyTo.caption.take(REPLY_SNIPPET_MAX).ifBlank { "Media" }
-                    is Message.Call, null -> null
-                },
+                replyToText = replyTo?.replySnippet(),
                 replyToSenderId = replyTo?.senderId,
             )
             messageRepository.sendMessage(message).fold(
@@ -460,7 +474,18 @@ class SendMessageUseCase @Inject constructor(
                 onFailure = { e -> emit(Resource.Error(e.message ?: "Failed to send message")) })
         } catch (e: Exception) { emit(Resource.Error(e.message ?: "Internal error occurred")) }
     }
-    private companion object { const val REPLY_SNIPPET_MAX = 200 }
+}
+```
+
+The snippet rule lives on the domain model, so text sends and voice replies share it
+(`domain/model/Message.kt:72`):
+
+```kotlin
+fun replySnippet(): String? = when (this) {
+    is Text -> text.take(REPLY_SNIPPET_MAX)
+    is Media -> caption.take(REPLY_SNIPPET_MAX).ifBlank { "Media" }
+    is Clip -> clip.previewLabel
+    is Call -> null
 }
 ```
 
@@ -485,10 +510,12 @@ class MessageRepositoryImpl @Inject constructor(
 ) : IMessageRepository {
 
     override fun getMessagesStream(conversationId: String): Flow<List<Message>> {
-        return messageBox.query(
-            ObxMessage_.conversationId.equal(conversationId)
-                .and(ObxMessage_.deleted.equal(false)),
-        ).order(ObxMessage_.timestamp).build().asFlow()
+        return queryFlow {
+            messageBox.query(
+                ObxMessage_.conversationId.equal(conversationId)
+                    .and(ObxMessage_.deleted.equal(false)),
+            ).order(ObxMessage_.timestamp).build()
+        }
             .map { rows -> rows.map { it.toDomain() } }
             .flowOn(Dispatchers.Default)
     }
