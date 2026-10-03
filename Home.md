@@ -10,9 +10,10 @@ was not recoverable from the source or history, the note says so instead of inve
 
 ## What the app is
 
-A one-to-one messenger: phone-number auth, real-time text and media chat, voice and video
-calls, presence and typing indicators, offline-first local storage, push notifications with
-inline reply and conversation bubbles, and optional end-to-end encryption. Kotlin, Jetpack
+A one-to-one messenger (launcher name "Switch", current release 0.1.13.1): phone-number auth,
+real-time text and media chat, voice messages, voice and video calls, presence and typing
+indicators, offline-first local storage, push notifications with inline reply and conversation
+bubbles, account deletion, and optional end-to-end encryption. Kotlin, Jetpack
 Compose UI, MVI presentation, Hilt DI, ObjectBox local persistence, Firebase backend
 (Firestore + Realtime Database + Auth + Storage + Cloud Messaging + Functions), Agora RTC for
 calls.
@@ -38,6 +39,7 @@ Every feature has an "Explained Simply" companion:
 - [[Settings - Explained Simply]]
 - [[End-to-End Encryption - Explained Simply]]
 - [[Appearance and Theming - Explained Simply]]
+- [[Voice Messages - Explained Simply]]
 
 ## Architecture
 
@@ -54,29 +56,43 @@ Every feature has an "Explained Simply" companion:
   manual `EntryPoint` used from framework-instantiated components.
 - [[Async and Reactivity]] - Flow vs StateFlow vs SharedFlow, `callbackFlow` bridges,
   dispatcher and scope choices, with the real call site for each.
-- [[Navigation]] - Navigation 3 typed routes, the `NavDisplay` back stack, and how nav
-  arguments reach a ViewModel's `SavedStateHandle`.
+- [[Navigation]] - the session gate (`SessionState`), Navigation 3 typed routes, the
+  `NavDisplay` back stack, and how nav arguments reach a ViewModel's `SavedStateHandle`.
+
+Historical design records (kept for context, not current behaviour):
+
+- [[Paging 3 Integration (Design)]] - Paging 3 shipped on 2026-07-25 and was reverted on
+  2026-07-28; lists are plain reactive Flows again.
+- [[File Layout Refactor (refactor-readability)]] and
+  [[File Layout Refactor - Implementation Plan]] - the 2026-08-11 one-subject-per-file refactor.
 
 ## Features
 
-- [[Authentication]] - phone-number OTP sign-in, account linking, session bootstrap.
+- [[Authentication]] - phone-number OTP sign-in, the session gate, account linking, session
+  bootstrap and history restore, logout hygiene.
 - [[Conversations List]] - the chat list, offline-first stream, per-participant presence and
   avatars, delete-for-me vs delete-for-everyone.
 - [[Search and Suggestions]] - the tab-bar search field expand animation, back-gesture close, and
   the "Recently searched" / "Recently opened" result suggestions backed by a recents store.
 - [[Chat and Messaging]] - send/receive, replies, media attachments, read receipts, paging,
-  message deletion rules.
+  message deletion rules, deleted peers.
+- [[Voice Messages]] - hold-to-record with lock and slide-to-cancel, drafts on interruption,
+  the crash-safe outbox, encrypted upload, ExoPlayer playback with auto-advance, and the mini
+  player.
 - [[Calls (Voice and Video)]] - Agora RTC, the foreground-service call state machine, the
-  active-call bar with swipe/bubble/snap-back gestures, PiP video, and call history.
+  active-call bar with swipe/bubble/snap-back gestures, PiP video, screen-on and proximity
+  blanking, and call history.
 - [[Presence and Typing]] - online/away/offline presence and typing indicators over Realtime
   Database.
 - [[Notifications]] - FCM handling, offline message persistence, MessagingStyle, conversation
   shortcuts and bubbles, inline reply.
-- [[Settings]] - the settings screens and the DataStore-backed theme preference.
+- [[Settings]] - the settings screens, the DataStore-backed theme preference, and account
+  deletion.
 - [[End-to-End Encryption]] - X25519 + HKDF + AES-GCM message encryption, key registry, epoch
   rotation, safety numbers.
 - [[Appearance and Theming]] - light/dark/system theme mode, gradient and imported wallpapers,
-  background intensity, the design-token layer, and the reusable motion modifiers.
+  background intensity, the design-token layer, the reusable motion modifiers, and the WCAG
+  contrast suite.
 
 ## Feature code walkthroughs
 
@@ -92,6 +108,7 @@ Each feature also has a `- Code` companion that embeds and explains that feature
 - [[Settings - Code]]
 - [[End-to-End Encryption - Code]]
 - [[Appearance and Theming - Code]]
+- [[Voice Messages - Code]]
 
 ## Basic examples
 
@@ -110,6 +127,7 @@ thing.
 - [[Settings - Basic Example]]
 - [[End-to-End Encryption - Basic Example]]
 - [[Appearance and Theming - Basic Example]]
+- [[Voice Messages - Basic Example]]
 
 Every feature note also carries a `## Visualization` section with a Mermaid diagram of its core
 data flow.
