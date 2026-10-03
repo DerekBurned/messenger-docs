@@ -37,7 +37,7 @@ the board becomes correct.
 
 1. As you type, the app waits 500ms (so it does not spam on every keystroke), then writes a note
    under `typing/{chatId}/{yourId}` (`ChatViewModel.onTextChanged`,
-   `presentation/viewmodel/ChatViewModel.kt:324`).
+   `presentation/viewmodel/ChatViewModel.kt:445`).
 
 2. It also sets a 5-second self-clear, and clears immediately if you empty the box.
 
