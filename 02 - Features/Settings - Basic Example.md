@@ -43,14 +43,15 @@ a recomposition or rotation does not re-open it, while still stopping when the s
 
 ## How the real code specialises it
 
-- The store is `ThemePreferenceStore` (`data/local/prefs/ThemePreferenceStore.kt:17`), a
+- The store is `ThemePreferenceStore` (`data/local/prefs/ThemePreferenceStore.kt:27`), a
   `@Singleton` over `preferencesDataStore("theme_prefs")`; the `runCatching` fallback to `SYSTEM`
-  is exactly `themeMode` (`:27`).
-- `AppearanceViewModel` (`presentation/viewmodel/AppearanceViewModel.kt:26`) does the `stateIn`.
-- The store holds three settings (theme, background, intensity) and layers a live-preview overlay
-  on intensity - see [[Appearance and Theming - Basic Example]] and [[Appearance and Theming]].
-- Other settings areas (privacy, security/safety numbers, notifications, storage, language) hang
-  off the same settings hub - see [[Settings]].
+  is exactly `themeMode` (`:40`).
+- `AppearanceViewModel` (`presentation/viewmodel/AppearanceViewModel.kt:30`) does the `stateIn`.
+- The store holds more settings than the theme (background, intensity, bar position, text size,
+  font, saved wallpapers) and layers a live-preview overlay on intensity - see
+  [[Appearance and Theming - Basic Example]] and [[Appearance and Theming]].
+- Other settings areas (privacy, account deletion, security/safety numbers, notifications,
+  storage, language) hang off the same settings hub - see [[Settings]].
 
 ## Related
 

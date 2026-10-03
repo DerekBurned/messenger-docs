@@ -21,10 +21,10 @@ you change the note, the app redecorates. The note is still there tomorrow.
 ## Step by step: switching to dark mode
 
 1. On the Appearance screen you flip the dark switch -> `AppearanceViewModel.setDarkTheme(true)`
-   (`presentation/viewmodel/AppearanceViewModel.kt:22`).
+   (`presentation/viewmodel/AppearanceViewModel.kt:51`).
 
 2. That writes `DARK` to the sticky note: `ThemePreferenceStore.setThemeMode(DARK)`
-   (`data/local/prefs/ThemePreferenceStore.kt:28`).
+   (`data/local/prefs/ThemePreferenceStore.kt:79`).
 
 3. The sticky note is a live stream. Because the app is watching it, the new value flows out
    immediately.
@@ -38,7 +38,7 @@ you change the note, the app redecorates. The note is still there tomorrow.
 
 ## The code, with plain-English comments
 
-The sticky note (`data/local/prefs/ThemePreferenceStore.kt:22`):
+The sticky note (`data/local/prefs/ThemePreferenceStore.kt:40`):
 
 ```kotlin
 // Reading returns a LIVE stream: it emits again every time the value changes on disk.
@@ -53,7 +53,7 @@ suspend fun setThemeMode(mode: ThemeMode) {
 ```
 
 Giving the screen a value ready on the first frame
-(`presentation/viewmodel/AppearanceViewModel.kt:19`):
+(`presentation/viewmodel/AppearanceViewModel.kt:30`):
 
 ```kotlin
 val themeMode: StateFlow<ThemeMode> = themePreferenceStore.themeMode
