@@ -18,13 +18,14 @@ tags:
 
 ```kotlin
 override fun getMessagesStream(conversationId: String): Flow<List<Message>> {
-    return messageBox.query(
-        ObxMessage_.conversationId.equal(conversationId)
-            .and(ObxMessage_.deleted.equal(false)),
-    )
-        .order(ObxMessage_.timestamp)
-        .build()
-        .asFlow()
+    return queryFlow {
+        messageBox.query(
+            ObxMessage_.conversationId.equal(conversationId)
+                .and(ObxMessage_.deleted.equal(false)),
+        )
+            .order(ObxMessage_.timestamp)
+            .build()
+    }
         .map { rows -> rows.map { it.toDomain() } }
         .flowOn(Dispatchers.Default)
 }
@@ -33,7 +34,7 @@ override fun getMessagesStream(conversationId: String): Flow<List<Message>> {
 Мета: віддати повідомлення розмови як живий список, що повторно випромінюється щоразу, коли
 локальна база змінюється, без опитування з боку UI. Він повертає `Flow` (холодний), бо підписка
 ObjectBox має існувати лише поки екран збирає; коли користувач залишає чат, збирання
-завершується, а нативна підписка розбирається (див. `asFlow` нижче).
+завершується, а нативна підписка розбирається (див. `queryFlow` нижче).
 
 Чому `flowOn(Dispatchers.Default)`: `map { it.toDomain() }` конвертує кожен рядок у доменну модель
 - чиста робота CPU. `flowOn` переносить upstream (випромінювання запиту й маппінг) на диспетчер
@@ -76,9 +77,15 @@ fun <T> Query<T>.asFlow(): Flow<List<T>> = callbackFlow {
 `trySend` (а не `send`), бо колбек observer - не suspend-контекст; `trySend` не блокує і за
 стандартного буферизованого каналу за звичайного навантаження нічого не відкидає.
 
+`queryFlow` (`ObxFlow.kt:17`) - той самий міст з однією відмінністю: він приймає білдер і викликає
+`build()` всередині `callbackFlow`, тож кожне збирання отримує власний свіжий `Query`. З `asFlow`
+`Query` створюється один раз і закривається в `awaitClose`, тож повторне збирання того самого Flow
+підписалося б на закритий хендл. Репозиторії використовують `queryFlow` для потоків, які екран може
+збирати більше одного разу (`getMessagesStream`, списки нещодавніх, id видалених кліпів).
+
 ### Snapshot listener Firestore - `FirestoreService.getRecentMessagesStream`
 
-`data/remote/firebase/FirestoreService.kt:209`. `callbackFlow` обгортає
+`data/remote/firebase/FirestoreService.kt:251`. `callbackFlow` обгортає
 `addSnapshotListener(MetadataChanges.INCLUDE)`:
 
 ```kotlin
@@ -100,9 +107,9 @@ awaitClose { listener.remove() }
 надсилання рендеряться до підтвердження сервера. `close(error)` пропагує збій прослуховування як
 виняток Flow; `awaitClose { listener.remove() }` від'єднує слухача Firestore, коли збирання
 завершується. Потік сирих DTO потім `map`-иться через E2EE-кодек
-(`data/remote/firebase/FirestoreService.kt:234`) - див. [[End-to-End Encryption_UA|Наскрізне шифрування]].
+(`data/remote/firebase/FirestoreService.kt:281`) - див. [[End-to-End Encryption_UA|Наскрізне шифрування]].
 
-`getAllConversations` (`data/remote/firebase/FirestoreService.kt:422`) має ту саму форму і
+`getAllConversations` (`data/remote/firebase/FirestoreService.kt:493`) має ту саму форму і
 додатково виносить id видалених документів та `snapshot.metadata.isFromCache` у значення
 `ConversationSync`.
 
@@ -124,7 +131,7 @@ fun observeConnectionState(): Flow<Boolean> = callbackFlow {
 }
 ```
 
-`observePresence` (`RealtimeDbService.kt:59`) і `observeTyping` (`RealtimeDbService.kt:88`)
+`observePresence` (`RealtimeDbService.kt:59`) і `observeTyping` (`RealtimeDbService.kt:97`)
 дотримуються ідентичного патерну. У кожному разі `awaitClose` знімає слухача, тож спостерігач у
 фоні припиняє отримувати пуші RTDB.
 
@@ -134,34 +141,38 @@ fun observeConnectionState(): Flow<Boolean> = callbackFlow {
 одразу отримувати останнє.
 
 - Стан UI у ViewModel - `MutableStateFlow(initialState)`, відкритий через `asStateFlow()`
-  (`presentation/base/MviViewModel.kt:25`). UI потрібне значення на першому кадрі; голий `Flow`
+  (`presentation/base/mvi/MviViewModel.kt:19`). UI потрібне значення на першому кадрі; голий `Flow`
   залишив би екран порожнім до першого випромінювання. Див.
   [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]].
 - Глобальний стан дзвінка - `ActiveCallHolder` (`data/remote/call/ActiveCallHolder.kt:37`) - це
   `object` із `MutableStateFlow<ActiveCall?>`. Foreground-сервіс дзвінка - єдиний писар; UI
-  (`presentation/navigation/navigation.kt:143`, `ActiveCallBar`, `CallViewModel`) - читач.
+  (`presentation/navigation/graph/MainDisplay.kt:147`, `ActiveCallBar`, `CallViewModel`) - читач.
   `StateFlow` пасує, бо "поточний дзвінок" - це стан із визначеним поточним значенням (можливо
   `null`), який читають з багатьох місць. Див. [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]].
 - Режим показу панелі дзвінка - `CallBarPresenter.mode`
-  (`presentation/components/call/CallBarPresenter.kt:12`) - це `MutableStateFlow<CallBarMode>`
+  (`presentation/components/call/CallBarPresenter.kt:11`) - це `MutableStateFlow<CallBarMode>`
   (BAR / HIDDEN / BUBBLE).
 - Прогрес передавання медіа - `MediaTransferManager.transfers`, повторно відкритий як
   `IMediaRepository.transfers: StateFlow<Map<String, MediaTransfer>>`
-  (`data/repository/MediaRepositoryImpl.kt:63`).
+  (`data/repository/MediaRepositoryImpl.kt:60`).
+- Запис і відтворення голосу - `VoiceRecorder.state` (`data/media/VoiceRecorder.kt:87`) та
+  `ClipPlaybackController.state` (`data/media/ClipPlaybackController.kt:88`) - singleton-и рівня
+  застосунку, тож композер чату, голосові бульбашки й міні-плеєр на всіх вкладках читають одне
+  поточне значення. Див. [[Voice Messages_UA|Голосові повідомлення]].
 
-`_state.update { }` (`presentation/base/MviViewModel.kt:42`,
-`presentation/viewmodel/ConversationsViewModel.kt:65`) - це атомарне оновлення compare-and-set,
-що робить конкурентні редьюсери безпечними.
+`_state.update { }` (`presentation/base/mvi/MviViewModel.kt:36`; `ChatsViewModel` робить те саме
+зі своїм `_uiState`, `presentation/viewmodel/ChatsViewModel.kt:67`) - це атомарне оновлення
+compare-and-set, що робить конкурентні редьюсери безпечними.
 
 ## SharedFlow проти Channel для одноразових подій
 
 Два механізми для "події, а не стан", обрані по місцю:
 
 - `SharedFlow(replay = 0, extraBufferCapacity = 16, onBufferOverflow = DROP_OLDEST)` для ефектів
-  MVI (`presentation/base/MviViewModel.kt:28`). Нульовий replay, щоб повернутий екран не спрацював
+  MVI (`presentation/base/mvi/MviViewModel.kt:22`). Нульовий replay, щоб повернутий екран не спрацював
   ефект знову; буферизований + non-suspending emit, тож `emitEffect` ніколи не блокує.
 - `Channel(Channel.BUFFERED).receiveAsFlow()` для сигналу виходу з екрана дзвінка в `CallViewModel`
-  (`presentation/viewmodel/CallViewModel.kt:61`). `Channel` односпоживчий із гарантованою
+  (`presentation/viewmodel/CallViewModel.kt:51`). `Channel` односпоживчий із гарантованою
   доставкою, що відповідає "навігувати геть рівно один раз".
 - `Channel(Channel.CONFLATED)` для переходів присутності в `PresenceManager`
   (`data/presence/PresenceManager.kt:24`). CONFLATED тримає лише останній запитаний стан, тож
@@ -171,49 +182,66 @@ fun observeConnectionState(): Flow<Boolean> = callbackFlow {
 
 - Білдери `flow { }` для одноразової suspend-роботи, обгорнутої як потік: `SendMessageUseCase`
   (`domain/usecase/message/SendMessageUseCase.kt:21`) випромінює `Resource.Loading/Success/Error`;
-  `MessageRepositoryImpl.observeRecentMessages` (`data/repository/MessageRepositoryImpl.kt:139`)
+  `MessageRepositoryImpl.observeRecentMessages` (`data/repository/MessageRepositoryImpl.kt:140`)
   обгортає collect у `flow { }.flowOn(Dispatchers.IO)` (тут IO, бо це керує мережевим
   snapshot-потоком і записує рядки).
 - `combine` для злиття потоків: `ChatViewModel.observePartnerPresence`
-  (`presentation/viewmodel/ChatViewModel.kt:283`) комбінує потік присутності з 60-секундним
+  (`presentation/viewmodel/ChatViewModel.kt:400`) комбінує потік присутності з 60-секундним
   `tickerFlow`, тож напис "останній раз у мережі N хвилин тому" оновлюється за таймером, навіть
   коли сама присутність не змінилася; `FirebasePresenceService.observeMultiplePresence`
-  (`data/service/FirebasePresenceService.kt:37`) комбінує список потоків присутності по
+  (`data/service/FirebasePresenceService.kt:30`) комбінує список потоків присутності по
   користувачах в єдиний `Map`.
 - `onEach { }.launchIn(scope)` для збирання "запустив і забув" у стан:
-  `ChatViewModel.observePartnerAlias` (`presentation/viewmodel/ChatViewModel.kt:118`) і
-  `observeTransfers` (`presentation/viewmodel/ChatViewModel.kt:303`).
+  `ChatViewModel.observePartnerAlias` (`presentation/viewmodel/ChatViewModel.kt:144`) і
+  `observeTransfers` (`presentation/viewmodel/ChatViewModel.kt:424`).
 - `collectLatest` там, де нове випромінювання має скасувати роботу, розпочату для попереднього:
   `CallForegroundService.observeRemoteStatus`
-  (`data/remote/call/CallForegroundService.kt:342`), `CallViewModel.observeActiveCall`
-  (`presentation/viewmodel/CallViewModel.kt:115`), `SyncCoordinator`
-  (`data/sync/SyncCoordinator.kt:30`).
+  (`data/remote/call/CallForegroundService.kt:352`), `CallViewModel.observeActiveCall`
+  (`presentation/viewmodel/CallViewModel.kt:103`), `SyncCoordinator`
+  (`data/sync/SyncCoordinator.kt:40`).
 - `onStart` / `catch` для обрамлення потоку станом завантаження та обробкою помилок:
-  `ConversationsViewModel.loadConversations`
-  (`presentation/viewmodel/ConversationsViewModel.kt:64`), `GetMessagesUseCase`
+  `ChatsViewModel.loadConversations`
+  (`presentation/viewmodel/ChatsViewModel.kt:81`), `GetMessagesUseCase`
   (`domain/usecase/message/GetMessageUseCase.kt:16`).
 - `withTimeoutOrNull` для обмеження очікування: `MediaRepositoryImpl.uploadAndSend`
-  (`data/repository/MediaRepositoryImpl.kt:200`) обмежує завантаження кількох файлів 35 секундами;
-  `ChatViewModel.jumpToMessage` (`presentation/viewmodel/ChatViewModel.kt:192`) обмежує кожне
-  завантаження сторінки під час пошуку назад.
+  (`data/repository/MediaRepositoryImpl.kt:180`) обмежує завантаження кількох файлів 35 секундами;
+  `ChatViewModel.jumpToMessage` (`presentation/viewmodel/ChatViewModel.kt:302`) обмежує кожне
+  завантаження сторінки під час пошуку назад. Голосові кліпи натомість масштабують очікування з
+  розміром файлу: `clipUploadTimeout` (`data/repository/ClipRepositoryImpl.kt:381`) - це 30 с плюс
+  одна секунда на кожні 8000 байтів, а наступний запис у Firestore підтверджується через
+  `FirestoreService.sendMessage(..., confirmWithin = 20.seconds)`, що обгортає `write.await()` у
+  `withTimeoutOrNull` (`data/remote/firebase/FirestoreService.kt:152`).
+- Спільний `Deferred` на ключ для дедуплікації паралельної роботи: `InFlight`
+  (`data/repository/ClipRepositoryImpl.kt:384`) тримає один `async(start = CoroutineStart.LAZY)` на
+  id повідомлення, тож дві бульбашки, що просять той самий кліп, завантажують його один раз і обидві
+  чекають той самий результат. Запис прибирає себе в `invokeOnCompletion`, тож збій не кешується.
 
 ## Скоупи й диспетчери - який і чому
 
-- `viewModelScope` - уся робота ViewModel (`ChatViewModel`, `ConversationsViewModel`,
+- `viewModelScope` - уся робота ViewModel (`ChatViewModel`, `ChatsViewModel`,
   `AuthViewModel`, `CallViewModel`). Скасовується автоматично в `onCleared`, тож ніщо не переживає
-  екран. Ручні хендли `Job` (наприклад `typingJob`,
-  `presentation/viewmodel/ChatViewModel.kt:68`) скасовуються явно для дебаунсу.
+  екран. Ручні хендли `Job` (наприклад `typingHeartbeatJob` / `typingStopJob`,
+  `presentation/viewmodel/ChatViewModel.kt:86`) скасовуються явно для дебаунсу.
 - `@Singleton`, що володіє власним `CoroutineScope(SupervisorJob() + Dispatchers.IO)` -
   використовується там, де робота має пережити будь-який окремий екран. `MediaRepositoryImpl`
-  (`data/repository/MediaRepositoryImpl.kt:60`): завантаження, розпочате з екрана чату, має
+  (`data/repository/MediaRepositoryImpl.kt:57`): завантаження, розпочате з екрана чату, має
   завершитися навіть після того, як користувач пішов, тож воно не може використовувати
   `viewModelScope`. `SupervisorJob` означає, що одне невдале завантаження не скасовує інші;
   `Dispatchers.IO`, бо завантаження - це блокуючий IO. Scope ніколи не скасовується - він живе
-  весь застосунок, відповідно до тривалості `@Singleton`.
+  весь застосунок, відповідно до тривалості `@Singleton`. `ClipRepositoryImpl`
+  (`data/repository/ClipRepositoryImpl.kt:59`) має ту саму форму плюс `CoroutineExceptionHandler`,
+  що логує, тож збій задачі голосового кліпу ніколи не обвалить процес; кожне надсилання працює як
+  зареєстрований `Job` у `sendJobs`, тож повтор і скасування можуть його знайти.
+- `CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)` - `VoiceRecorder`
+  (`data/media/VoiceRecorder.kt:84`) і `ClipPlaybackController`
+  (`data/media/ClipPlaybackController.kt:85`). Обидва керують платформним об'єктом (`MediaRecorder`,
+  ExoPlayer) і слухачем аудіофокусу; обмеження кожного виклику й оновлення стану головним потоком
+  серіалізує start/stop/interrupt та колбеки плеєра без блокувань, а ExoPlayer треба
+  використовувати з того потоку, на якому його створено.
 - `CoroutineScope(SupervisorJob() + Dispatchers.IO)` всередині `Service` - `CallForegroundService`
-  (`data/remote/call/CallForegroundService.kt:53`) виконує машину станів дзвінка (записи
+  (`data/remote/call/CallForegroundService.kt:57`) виконує машину станів дзвінка (записи
   сигналізації, рінгтони, таймаути) на цьому scope і скасовує його в `onDestroy`
-  (`data/remote/call/CallForegroundService.kt:911`) через `scope.coroutineContext[Job]?.cancel()`,
+  (`data/remote/call/CallForegroundService.kt:941`) через `scope.coroutineContext[Job]?.cancel()`,
   тож жоден job таймауту не переживає сервіс. Див. [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]].
 - `CoroutineScope(SupervisorJob() + Dispatchers.Default)` - `SyncCoordinator`
   (`data/sync/SyncCoordinator.kt:23`) спостерігає за потоком мережі на `Default` і запускає
@@ -228,4 +256,5 @@ fun observeConnectionState(): Flow<Boolean> = callbackFlow {
 [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]] - [[Data Layer_UA|Шар даних]] -
 [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]] -
 [[Presence and Typing_UA|Присутність і набір тексту]] -
-[[End-to-End Encryption_UA|Наскрізне шифрування]] - [[Architecture Overview_UA|Огляд архітектури]]
+[[End-to-End Encryption_UA|Наскрізне шифрування]] - [[Architecture Overview_UA|Огляд архітектури]] -
+[[Voice Messages_UA|Голосові повідомлення]]
