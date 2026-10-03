@@ -160,6 +160,27 @@ hang-up and leave a phantom ongoing call. `ActiveConnectionHolder`
 `MessengerConnection.markDisconnected` (`MessengerConnection.kt:60`) does the actual
 `setDisconnected` + `destroy`.
 
+## The screen during a call
+
+Until 0.1.13.1 the display timed out mid-call because nothing held it awake. Now:
+
+- `KeepScreenOn(enabled)` (`presentation/components/common/KeepScreenOn.kt:9`) is a
+  `DisposableEffect` that adds `FLAG_KEEP_SCREEN_ON` to the host window while `enabled` and
+  clears it on dispose. `CallScreenContent` uses it with `enabled = !state.callEnded`; the voice
+  recorder's composer reuses it while recording (see [[Voice Messages]]).
+- `IncomingCallActivity` sets the same flag next to `setShowWhenLocked(true)` when it is created.
+- Proximity blanking: `CallForegroundService` collects `ActiveCallHolder.state` in `onCreate`
+  (`CallForegroundService.kt:95`) and wants the lock while the call is active, not ended, with
+  the local camera off and the speaker off - an earpiece audio call. `acquireProximityLock`
+  (`:722`) takes a `PROXIMITY_SCREEN_OFF_WAKE_LOCK` (if the device supports it) so the screen
+  turns off against the ear; switching to video or speaker, or ending the call, releases it with
+  `RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY` (`:735`), and `stopSelfClean` releases it as well. The
+  lock is acquired with a 10-minute timeout and is only re-acquired when the call state changes.
+  This needs the `WAKE_LOCK` permission.
+
+`MainActivity` is declared with `android:screenOrientation="fullSensor"`, so the app rotates
+freely, including the call screen.
+
 ## Call history
 
 Ended/missed/unreached calls are recorded as call-type chat messages (`MissedCallRecorder`,

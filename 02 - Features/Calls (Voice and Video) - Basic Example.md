@@ -40,16 +40,16 @@ object ActiveCall {
 
 ## How the real code specialises it
 
-- The Agora wrapper is `AgoraCallService` (`data/remote/call/AgoraCallService.kt:20`): it adapts
+- The Agora wrapper is `AgoraCallService` (`data/remote/call/AgoraCallService.kt:21`): it adapts
   `IRtcEngineEventHandler` into a domain `CallEventListener`, sets `ChannelMediaOptions`
-  (`joinChannel`, `:129`), and lazily enables video (`ensureVideoModule`, `:204`).
+  (`joinChannel`, `:130`), and lazily enables video (`ensureVideoModule`, `:238`).
 - The single-writer holder is `ActiveCallHolder` (`data/remote/call/ActiveCallHolder.kt:37`); its
   `set`/`update`/`clear` are `internal` so only `CallForegroundService`
-  (`CallForegroundService.kt:45`) writes. The service owns the state machine
+  (`CallForegroundService.kt:50`) writes. The service owns the state machine
   (`START_OUTGOING`/`INCOMING`/`ACCEPT`/`DECLINE`/`END`) because only a foreground service
   reliably outlives the app during a call.
 - Everything else - named timeout jobs (ring 60s, reconnect 20s), the swipe/bubble/snap-back bar
-  (`ActiveCallBar.kt:88`), PiP/Telecom, and call-history-as-messages - is layered on this base in
+  (`ActiveCallBar.kt:149`), screen-on and proximity blanking, PiP/Telecom, and call-history-as-messages - is layered on this base in
   [[Calls (Voice and Video)]].
 
 ## Related

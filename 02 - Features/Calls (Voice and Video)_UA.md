@@ -161,6 +161,28 @@ detectVerticalDragGestures(
 `MessengerConnection.markDisconnected` (`MessengerConnection.kt:60`) робить власне
 `setDisconnected` + `destroy`.
 
+## Екран під час дзвінка
+
+До 0.1.13.1 дисплей гас посеред дзвінка, бо ніщо не тримало його увімкненим. Тепер:
+
+- `KeepScreenOn(enabled)` (`presentation/components/common/KeepScreenOn.kt:9`) - це
+  `DisposableEffect`, що додає `FLAG_KEEP_SCREEN_ON` вікну-хосту, поки `enabled`, і знімає його при
+  dispose. `CallScreenContent` використовує його з `enabled = !state.callEnded`; композер голосового
+  запису перевикористовує його під час запису (див. [[Voice Messages_UA|Голосові повідомлення]]).
+- `IncomingCallActivity` ставить той самий прапорець поруч із `setShowWhenLocked(true)` при
+  створенні.
+- Затемнення від датчика наближення: `CallForegroundService` збирає `ActiveCallHolder.state` в
+  `onCreate` (`CallForegroundService.kt:95`) і хоче блокування, поки дзвінок активний, не
+  завершений, з вимкненою локальною камерою й вимкненим динаміком - тобто аудіодзвінок через
+  розмовний динамік. `acquireProximityLock` (`:722`) бере `PROXIMITY_SCREEN_OFF_WAKE_LOCK` (якщо
+  пристрій підтримує), тож екран гасне біля вуха; перемикання на відео чи гучний зв'язок або
+  завершення дзвінка звільняє його з `RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY` (`:735`), а
+  `stopSelfClean` теж його звільняє. Блокування береться з таймаутом 10 хвилин і повторно береться
+  лише при зміні стану дзвінка. Потрібен дозвіл `WAKE_LOCK`.
+
+`MainActivity` оголошено з `android:screenOrientation="fullSensor"`, тож застосунок вільно
+обертається, включно з екраном дзвінка.
+
 ## Історія дзвінків
 
 Завершені/пропущені/недосяжні дзвінки записуються як повідомлення чату типу дзвінка

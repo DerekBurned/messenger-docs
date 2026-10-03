@@ -71,7 +71,7 @@ private val _state = MutableStateFlow<ActiveCall?>(null)
 val state: StateFlow<ActiveCall?> = _state.asStateFlow()
 ```
 
-The screen just mirrors the clipboard (`presentation/viewmodel/CallViewModel.kt:113`):
+The screen just mirrors the clipboard (`presentation/viewmodel/CallViewModel.kt:103`):
 
 ```kotlin
 private fun observeActiveCall() {
@@ -87,14 +87,14 @@ private fun observeActiveCall() {
 }
 ```
 
-Buttons are just messages to the manager (`CallViewModel.kt:220`):
+Buttons are just messages to the manager (`CallViewModel.kt:214`):
 
 ```kotlin
 fun toggleMute() = sendAction(CallForegroundService.ACTION_TOGGLE_MUTE)
 // sendAction just does context.startService(intent) - the manager does the real work.
 ```
 
-Nothing leaks when it ends (`CallForegroundService.kt:905`):
+Nothing leaks when it ends (`CallForegroundService.kt:932`):
 
 ```kotlin
 override fun onDestroy() {
@@ -112,7 +112,7 @@ While a call runs, a small bar sits at the top. Drag it:
 - down past a threshold -> it shrinks into a floating bubble,
 - not far enough -> it springs back to its spot.
 
-The decision is a simple `when` on how far you dragged (`ActiveCallBar.kt:116`); see
+The decision is a simple `when` on how far you dragged (`ActiveCallBar.kt:198`); see
 [[Calls (Voice and Video)]] for the code.
 
 ---
