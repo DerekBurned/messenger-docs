@@ -30,7 +30,7 @@ Alice types `hi` and hits send. Here is the journey, with the real function name
    (`KeystoreKeyWrapper`) so even the phone's files do not hold it in the clear.
 
 2. Alice needs Bob's public key. She fetches it from Firebase (where Bob published it) and caches
-   it: `PeerKeyRegistry.ensurePeerKey` (`data/crypto/PeerKeyRegistry.kt:37`).
+   it: `PeerKeyRegistry.ensurePeerKey` (`data/crypto/PeerKeyRegistry.kt:64`).
 
 3. Alice builds the shared key K. She combines her private key with Bob's public key
    (this step is called ECDH), then runs the result through a "key stretcher" (HKDF):
@@ -44,7 +44,7 @@ Alice types `hi` and hits send. Here is the journey, with the real function name
 5. Alice sends the locked box, not the message. What actually goes to Firebase is a
    `RemoteMessageDto` where the readable fields are blanked and `enc = 1`, with `ciphertext`,
    `nonce`, and which key versions were used - built in `E2eeMessageCodec.encode`
-   (`data/crypto/E2eeMessageCodec.kt:29`). The word `hi` is nowhere in it.
+   (`data/crypto/E2eeMessageCodec.kt:38`). The word `hi` is nowhere in it.
 
 6. Firebase stores and forwards the box. It cannot read it - it has no key.
 
@@ -52,10 +52,12 @@ Alice types `hi` and hits send. Here is the journey, with the real function name
    public key, runs HKDF, and gets the identical K (that is the magic - swapping whose
    private/public goes in gives the same answer). Then he decrypts:
    `E2eeMessageCodec.decode` -> `decryptPayload` -> `ConversationCrypto.decrypt`
-   (`data/crypto/E2eeMessageCodec.kt:77`).
+   (`data/crypto/E2eeMessageCodec.kt:94`).
 
-8. Bob reads `hi`. If anything is wrong (missing key, tampered box), Bob does not crash - he shows
-   a placeholder `"Encrypted message"` instead (`undecryptable`, `E2eeMessageCodec.kt:113`).
+8. Bob reads `hi`. If anything is wrong (missing key, tampered box), Bob's phone first fetches
+   Alice's published key once more and retries; if that still fails it does not crash - it shows
+   a placeholder `"Message cannot be decrypted on this device"` instead (`undecryptable`,
+   `E2eeMessageCodec.kt:169`).
 
 ---
 
@@ -134,7 +136,7 @@ fun encrypt(key, plaintext, aad): EncryptedBlob {
 }
 ```
 
-What gets sent (`data/crypto/E2eeMessageCodec.kt:57`):
+What gets sent (`data/crypto/E2eeMessageCodec.kt:73`):
 
 ```kotlin
 return plain.copy(
@@ -149,15 +151,16 @@ return plain.copy(
 )
 ```
 
-Unlocking on Bob's side (`data/crypto/E2eeMessageCodec.kt:77`):
+Unlocking on Bob's side (`data/crypto/E2eeMessageCodec.kt:94`):
 
 ```kotlin
 suspend fun decode(dto): Message {
     if (dto.enc != 1) return dto.toDomain()  // not encrypted -> read as-is
 
-    // Try to unlock. If it fails for ANY reason, don't crash:
+    // Try to unlock. If it fails, refetch Alice's key once and try again. Still no? Don't crash:
     val payload = runCatching { decryptPayload(dto) }.getOrNull()
-        ?: return undecryptable(dto)         // show "Encrypted message" placeholder instead
+        ?: runCatching { retryWithFreshPeerKey(dto) }.getOrNull()
+        ?: return undecryptable(dto)         // "Message cannot be decrypted on this device"
 
     return dto.copy(text = payload.text).toDomain()  // success -> the real "hi"
 }
@@ -205,8 +208,8 @@ Note: metadata (who/when) is not hidden - only the content is. See the caveats i
 - Why AAD? It staples the message's identity to the box; tampering makes unlocking fail.
 - Why epochs (key versions)? So a phone can change its key later and old messages still open,
   because each message records which versions it used.
-- Why the "Encrypted message" placeholder? A missing or bad key should show a harmless
-  placeholder, never crash the chat.
+- Why the "Message cannot be decrypted on this device" placeholder? A missing or bad key should
+  show a harmless, honest placeholder, never crash the chat.
 
 ---
 

@@ -224,9 +224,10 @@ return plain.copy(
 suspend fun decode(dto): Message {
     if (dto.enc != 1) return dto.toDomain()  // не зашифроване -> читати як є
 
-    // Спробувати відімкнути. Якщо провал із БУДЬ-ЯКОЇ причини, не крашитися:
+    // Спробувати відімкнути. Провал - ще раз отримати ключ Аліси й спробувати. Знову ні? Не крашитися:
     val payload = runCatching { decryptPayload(dto) }.getOrNull()
-        ?: return undecryptable(dto)         // показати заглушку "Encrypted message"
+        ?: runCatching { retryWithFreshPeerKey(dto) }.getOrNull()
+        ?: return undecryptable(dto)         // "Message cannot be decrypted on this device"
 
     return dto.copy(text = payload.text).toDomain()  // успіх -> справжній "Привіт"
 }
@@ -254,8 +255,8 @@ suspend fun decode(dto): Message {
 - Навіщо AAD? Пришиває ідентичність повідомлення до скриньки; підробка ламає відмикання.
 - Навіщо епохи (версії ключів)? Щоб телефон міг згодом змінити ключ, а старі повідомлення досі
   відкривалися, бо кожне повідомлення записує, які версії вжито.
-- Навіщо заглушка «Encrypted message»? Відсутній чи поганий ключ має показувати безневинну заглушку, а
-  не крашити чат.
+- Навіщо заглушка «Message cannot be decrypted on this device»? Відсутній чи поганий ключ має
+  показувати безневинну й чесну заглушку, а не крашити чат.
 
 ---
 

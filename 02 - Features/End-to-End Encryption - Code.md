@@ -3,9 +3,10 @@
 Companion to [[End-to-End Encryption]]. The full crypto source, block by block. Every file here
 is small enough to show complete; snippets are verbatim from the repo.
 
-Files covered (`data/crypto/`): `ConversationCrypto.kt`, `MessageEnvelope.kt`,
-`E2eeMessageCodec.kt`, `IdentityKeyStore.kt`, `KeyWrapper.kt`, `MediaCipher.kt`,
-`PeerKeyRegistry.kt`, `E2eeBootstrap.kt`, `SafetyNumber.kt`.
+Files covered (`data/crypto/`): `ConversationCrypto.kt`, `model/MessagePayload.kt`,
+`model/MediaSecret.kt`, `model/ClipSecret.kt`, `CryptoEncoding.kt`, `E2eeMessageCodec.kt`,
+`IdentityKeyStore.kt`, `KeyWrapper.kt`, `MediaCipher.kt`, `PeerKeyRegistry.kt`,
+`E2eeBootstrap.kt`, `SafetyNumber.kt`. Long expressions are sometimes joined onto one line.
 
 ---
 
@@ -62,9 +63,9 @@ nonce, 128-bit tag, and AAD binding. Deep discussion in [[End-to-End Encryption]
 
 ---
 
-## 2. MessageEnvelope - payload types and helpers
+## 2. Payload types and helpers
 
-`MessageEnvelope.kt` in full:
+The payload types, one per file in `data/crypto/model/`:
 
 ```kotlin
 @Serializable
@@ -72,6 +73,7 @@ data class MessagePayload(
     val text: String = "",
     val replyToText: String? = null,
     val media: List<MediaSecret> = emptyList(),
+    val clip: ClipSecret? = null,
 )
 
 @Serializable
@@ -81,22 +83,34 @@ data class MediaSecret(
     val blurHash: String = "",
 )
 
+@Serializable
+data class ClipSecret(
+    val key: String? = null,
+    val waveform: List<Int> = emptyList(),
+)
+```
+
+`CryptoEncoding.kt`:
+
+```kotlin
 fun messageAad(conversationId: String, messageId: String, senderId: String, type: String): ByteArray =
     "$conversationId|$messageId|$senderId|$type".toByteArray()
 
 fun b64(bytes: ByteArray): String = java.util.Base64.getEncoder().encodeToString(bytes)
+
 fun unb64(value: String): ByteArray = java.util.Base64.getDecoder().decode(value)
 ```
 
-`MessagePayload` is what actually gets encrypted (the text, the reply snippet, and per-item media
-file keys as `MediaSecret`). `messageAad` binds the ciphertext to the message identity;
-`b64`/`unb64` are the wire encoding for keys/nonces/ciphertext.
+`MessagePayload` is what actually gets encrypted (the text, the reply snippet, per-item media
+file keys as `MediaSecret`, and for a voice clip its file key and waveform as `ClipSecret`).
+`messageAad` binds the ciphertext to the message identity; `b64`/`unb64` are the wire encoding for
+keys/nonces/ciphertext.
 
 ---
 
 ## 3. E2eeMessageCodec - encode/decode a Message
 
-`E2eeMessageCodec.kt` in full:
+`E2eeMessageCodec.kt` (the source also carries a few explanatory comments, not shown):
 
 ```kotlin
 @Singleton
@@ -108,6 +122,8 @@ class E2eeMessageCodec @Inject constructor(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
+    private val lastKeyRefreshAttempt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     suspend fun isEncryptable(conversationId: String): Boolean {
         val myUid = authService.getCurrentUserId() ?: return false
         val partnerId = participantResolver.partnerOf(conversationId, myUid) ?: return false
@@ -117,7 +133,11 @@ class E2eeMessageCodec @Inject constructor(
     suspend fun encode(message: Message): RemoteMessageDto {
         val plain = message.toRemoteDto()
         if (message is Message.Call) return plain
-        val hasEncryptedMedia = message is Message.Media && message.items.any { !it.fileKey.isNullOrBlank() }
+        val hasEncryptedMedia = when (message) {
+            is Message.Media -> message.items.any { !it.fileKey.isNullOrBlank() }
+            is Message.Clip -> !message.clip.fileKey.isNullOrBlank()
+            else -> false
+        }
         val myUid = authService.getCurrentUserId() ?: return plainOrFail(hasEncryptedMedia, plain)
         val partnerId = participantResolver.partnerOf(message.conversationId, myUid)
             ?: return plainOrFail(hasEncryptedMedia, plain)
@@ -133,6 +153,10 @@ class E2eeMessageCodec @Inject constructor(
                     }
                 },
             )
+            is Message.Clip -> MessagePayload(
+                replyToText = message.replyToText,
+                clip = message.clip.toSecret(),
+            )
             is Message.Call -> return plain
         }
         val key = ConversationCrypto.deriveConversationKey(
@@ -142,6 +166,7 @@ class E2eeMessageCodec @Inject constructor(
         return plain.copy(
             text = "", replyToText = null,
             mediaItems = plain.mediaItems.map { it.copy(blurHash = "") },
+            clip = plain.clip?.copy(waveform = emptyList()),
             enc = 1, ciphertext = b64(blob.ciphertext), nonce = b64(blob.nonce),
             senderEpoch = identity.epoch, recipientEpoch = peer.epoch, recipientId = partnerId)
     }
@@ -154,13 +179,36 @@ class E2eeMessageCodec @Inject constructor(
     suspend fun decode(dto: RemoteMessageDto, hasPendingWrites: Boolean = false): Message {
         if (dto.enc != 1) return dto.toDomain(hasPendingWrites)
         val payload = runCatching { decryptPayload(dto) }.getOrNull()
+            ?: runCatching { retryWithFreshPeerKey(dto) }.getOrNull()
             ?: return undecryptable(dto, hasPendingWrites)
-        val message = dto.copy(text = payload.text, replyToText = payload.replyToText).toDomain(hasPendingWrites)
-        if (message !is Message.Media || payload.media.isEmpty()) return message
-        val secrets = payload.media.associateBy { it.itemId }
-        return message.copy(items = message.items.map { item ->
-            secrets[item.id]?.let { secret -> item.copy(fileKey = secret.key, blurHash = secret.blurHash) } ?: item
-        })
+        val message = dto.copy(text = payload.text, replyToText = payload.replyToText)
+            .toDomain(hasPendingWrites)
+        val clipSecret = payload.clip
+        return when {
+            message is Message.Media && payload.media.isNotEmpty() -> {
+                val secrets = payload.media.associateBy { it.itemId }
+                message.copy(
+                    items = message.items.map { item ->
+                        secrets[item.id]?.let { secret ->
+                            item.copy(fileKey = secret.key, blurHash = secret.blurHash)
+                        } ?: item
+                    },
+                )
+            }
+            message is Message.Clip && clipSecret != null ->
+                message.copy(clip = message.clip.withSecret(clipSecret))
+            else -> message
+        }
+    }
+
+    private fun Clip.toSecret(): ClipSecret = when (this) {
+        is Clip.Voice -> ClipSecret(key = fileKey?.takeIf { it.isNotBlank() }, waveform = waveform)
+        is Clip.Video -> ClipSecret(key = fileKey?.takeIf { it.isNotBlank() })
+    }
+
+    private fun Clip.withSecret(secret: ClipSecret): Clip = when (this) {
+        is Clip.Voice -> copy(fileKey = secret.key, waveform = secret.waveform)
+        is Clip.Video -> copy(fileKey = secret.key)
     }
 
     private suspend fun decryptPayload(dto: RemoteMessageDto): MessagePayload {
@@ -181,19 +229,47 @@ class E2eeMessageCodec @Inject constructor(
         return json.decodeFromString(String(plaintext))
     }
 
-    private fun undecryptable(dto: RemoteMessageDto, hasPendingWrites: Boolean): Message =
-        dto.copy(text = UNDECRYPTABLE_TEXT, type = Message.TYPE_TEXT, mediaItems = emptyList(),
-            replyToMessageId = null, replyToText = null, replyToSenderId = null).toDomain(hasPendingWrites)
+    private suspend fun retryWithFreshPeerKey(dto: RemoteMessageDto): MessagePayload {
+        val myUid = authService.getCurrentUserId() ?: error("not signed in")
+        val iAmSender = dto.senderId == myUid
+        val partnerId = if (iAmSender) dto.recipientId else dto.senderId
+        val partnerEpoch = if (iAmSender) dto.recipientEpoch else dto.senderEpoch
+        check(partnerId.isNotBlank()) { "no partner to refresh key for" }
+        val throttleKey = "$partnerId:$partnerEpoch"
+        val now = System.currentTimeMillis()
+        val last = lastKeyRefreshAttempt[throttleKey]
+        check(last == null || now - last >= KEY_REFRESH_THROTTLE_MS) { "peer key recently refreshed" }
+        lastKeyRefreshAttempt[throttleKey] = now
+        peerKeyRegistry.refreshPeerKey(partnerId, partnerEpoch)
+        return decryptPayload(dto)
+    }
 
-    companion object { const val UNDECRYPTABLE_TEXT = "Encrypted message" }
+    private fun undecryptable(dto: RemoteMessageDto, hasPendingWrites: Boolean): Message =
+        dto.copy(
+            text = UNDECRYPTABLE_TEXT,
+            type = Message.TYPE_TEXT,
+            mediaItems = emptyList(),
+            clip = null,
+            replyToMessageId = null,
+            replyToText = null,
+            replyToSenderId = null,
+        ).toDomain(hasPendingWrites)
+
+    companion object {
+        const val UNDECRYPTABLE_TEXT = "Message cannot be decrypted on this device"
+        private const val KEY_REFRESH_THROTTLE_MS = 5 * 60 * 1000L
+    }
 }
 ```
 
 `encode` builds the `MessagePayload`, derives the key, AES-GCM-encrypts, and returns a DTO with
-plaintext cleared and `enc=1` + ciphertext/nonce/epochs set; it refuses to downgrade to plaintext
-when media is already encrypted (`plainOrFail`). `decode` works out which epochs apply based on
-sender/recipient, loads the matching peer key, decrypts, and re-hydrates media file keys; any
-failure returns the `undecryptable` placeholder rather than throwing. Wired into `FirestoreService`
+plaintext cleared (text, reply snippet, blurHashes, a clip's waveform) and `enc=1` +
+ciphertext/nonce/epochs set; it refuses to downgrade to plaintext when media or a clip is already
+encrypted (`plainOrFail`). `decode` works out which epochs apply based on sender/recipient, loads
+the matching peer key, and decrypts. If that fails it refetches the peer's published key for that
+epoch once (`retryWithFreshPeerKey`, at most every 5 minutes per peer and epoch, because `decode`
+runs on every snapshot emission); only then does it return the `undecryptable` placeholder. On
+success it re-hydrates media file keys or the clip's key and waveform. Wired into `FirestoreService`
 (see [[Chat and Messaging - Code]]) and the FCM handler (see [[Notifications - Code]]).
 
 ---
@@ -330,27 +406,34 @@ object MediaCipher {
     }
 
     fun decrypt(key: ByteArray, source: File, dest: File) {
-        val part = File(dest.parentFile, dest.name + ".part")
+        dest.parentFile?.mkdirs()
+        val part = File.createTempFile(dest.name + ".", ".part", dest.parentFile)
         try {
             source.inputStream().use { input ->
                 val nonce = ByteArray(NONCE_SIZE)
                 check(input.read(nonce) == NONCE_SIZE) { "encrypted file too short" }
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")
                 cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(TAG_BITS, nonce))
-                part.outputStream().use { out -> CipherInputStream(input, cipher).use { it.copyTo(out) } }
+                part.outputStream().use { out ->
+                    CipherInputStream(input, cipher).use { it.copyTo(out) }
+                }
             }
-            dest.delete()
-            check(part.renameTo(dest)) { "rename failed" }
-        } catch (e: Exception) { part.delete(); dest.delete(); throw e }
+            Files.move(part.toPath(), dest.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
+        } catch (e: Exception) {
+            part.delete()
+            throw e
+        }
     }
 }
 ```
 
 Per-file AES-256-GCM with the nonce prepended to the file, streamed via
-`CipherInputStream`/`CipherOutputStream` so large media never loads fully into memory. `decrypt`
-writes to a `.part` file and atomically renames on success, so a failed/aborted decrypt never
-leaves a half-written file. The per-file key is generated in `MediaRepositoryImpl.uploadAndSend`
-and carried inside the encrypted `MessagePayload` (see [[Chat and Messaging - Code]]).
+`CipherInputStream`/`CipherOutputStream`. `decrypt` writes to a uniquely named `.part` file
+(`createTempFile`, so two concurrent decrypts never share one) and moves it over the destination
+with `ATOMIC_MOVE` on success; on failure it deletes only its own part, so an existing good copy
+survives a failed decrypt. The per-file key is
+generated in `MediaRepositoryImpl.uploadAndSend` / `ClipRepositoryImpl` and carried inside the
+encrypted `MessagePayload` (see [[Chat and Messaging - Code]], [[Voice Messages - Code]]).
 
 ---
 
@@ -368,13 +451,38 @@ class PeerKeyRegistry @Inject constructor(
     private val identityKeyStore: IdentityKeyStore,
 ) {
     suspend fun publishIfNeeded(myUid: String) {
-        val identity = identityKeyStore.getOrCreate(myUid)
-        val doc = keysCollection(myUid).document(identity.epoch.toString())
-        val snapshot = runCatching { doc.get().await() }.getOrNull()
-        val localPub = b64(identity.publicKey)
-        if (snapshot?.getString("pub") == localPub) return
-        doc.set(mapOf("pub" to localPub, "epoch" to identity.epoch, "algo" to "X25519",
-            "updatedAt" to System.currentTimeMillis())).await()
+        var identity = identityKeyStore.getOrCreate(myUid)
+        var localPub = b64(identity.publicKey)
+        val existing = runCatching {
+            keysCollection(myUid).document(identity.epoch.toString()).get().await()
+        }.getOrNull()
+
+        if (existing?.exists() == true && existing.getString("pub") != localPub) {
+            val serverMax = runCatching {
+                keysCollection(myUid).orderBy("epoch", Query.Direction.DESCENDING).limit(1).get()
+                    .await().documents.firstOrNull()?.getLong("epoch")?.toInt()
+            }.getOrNull() ?: identity.epoch
+            while (identity.epoch <= serverMax) identity = identityKeyStore.rotate(myUid)
+            localPub = b64(identity.publicKey)
+        } else if (existing?.getString("pub") == localPub) {
+            return
+        }
+
+        keysCollection(myUid).document(identity.epoch.toString()).set(
+            mapOf(
+                "pub" to localPub,
+                "epoch" to identity.epoch,
+                "algo" to "X25519",
+                "updatedAt" to System.currentTimeMillis(),
+            ),
+        ).await()
+    }
+
+    suspend fun refreshPeerKey(uid: String, epoch: Int): PeerKey? {
+        val doc = runCatching { keysCollection(uid).document(epoch.toString()).get().await() }
+            .getOrNull() ?: return cachedPeerKey(uid, epoch)
+        val pub = doc.getString("pub") ?: return cachedPeerKey(uid, epoch)
+        return store(uid, epoch, pub).toPeerKey()
     }
 
     suspend fun ensurePeerKey(uid: String): PeerKey? {
@@ -428,9 +536,14 @@ class PeerKeyRegistry @Inject constructor(
 ```
 
 Keys are published under Firestore `users/{uid}/keys/{epoch}` and cached as `ObxPeerKey` rows
-(unique on `"uid:epoch"`). `ensurePeerKey` serves a fresh cached key (< 30 min) or fetches the
-latest epoch; `peerKeyForEpoch` fetches a specific historical epoch so old messages stay
-decryptable across rotations.
+(unique on `"uid:epoch"`). `publishIfNeeded` never overwrites a published key: a regenerated
+identity restarts at epoch 1, so if that epoch is already published with a different key it rotates
+the local identity until its epoch is above the server's highest, then publishes there - peers
+that cached the old key can still decrypt history. `ensurePeerKey` serves a fresh cached key
+(< 30 min) or fetches the latest epoch; `peerKeyForEpoch` fetches a specific historical epoch so
+old messages stay decryptable across rotations; `refreshPeerKey` bypasses the cache for the
+codec's one-shot decode retry. (The source explains the rotation and the refresh in comments, not
+shown here.)
 
 ---
 

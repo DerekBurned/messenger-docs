@@ -8,17 +8,18 @@ derivation, and AES-256-GCM. Version marker in the code is `msgr-e2ee-v1`
 ## Pieces (`data/crypto/`)
 
 - `ConversationCrypto` (`ConversationCrypto.kt:13`) - the primitive layer (ECDH, HKDF, AES-GCM).
-- `E2eeMessageCodec` (`E2eeMessageCodec.kt:14`) - encode/decode a `Message` to/from a
+- `E2eeMessageCodec` (`E2eeMessageCodec.kt:18`) - encode/decode a `Message` to/from a
   `RemoteMessageDto`.
 - `IdentityKeyStore` - this device's long-term X25519 identity key pair, epoch, and private-key
   wrapping.
 - `KeyWrapper` / `KeystoreKeyWrapper` - Android Keystore wrapping of the private key at rest.
-- `PeerKeyRegistry` (`PeerKeyRegistry.kt:15`) - publish/fetch/cache peer public keys.
+- `PeerKeyRegistry` (`PeerKeyRegistry.kt:14`) - publish/fetch/cache peer public keys.
 - `E2eeBootstrap` (`E2eeBootstrap.kt:12`) - publishes this device's key at startup.
 - `ParticipantResolver` / `ObxParticipantResolver` - resolves the partner uid for a conversation.
 - `MediaCipher` - per-file media encryption.
 - `SafetyNumber` (`SafetyNumber.kt:6`) - a comparable fingerprint of two identity keys.
-- `MessageEnvelope` / payload types - the serialized plaintext shape.
+- `MessagePayload` / `MediaSecret` / `ClipSecret` (`data/crypto/model/`) - the serialized
+  plaintext shape; `messageAad` and the base64 helpers live in `CryptoEncoding.kt`.
 
 DI wiring is in `di/CryptoModule.kt` (see [[Dependency Injection (Hilt)]]).
 
@@ -53,10 +54,10 @@ val blob = ConversationCrypto.encrypt(key, json.encodeToString(payload).toByteAr
 ```
 
 The AAD ties the ciphertext to the conversation id, message id, sender, and type
-(`E2eeMessageCodec.kt:55`), so a ciphertext cannot be replayed under a different message
+(`messageAad`, `CryptoEncoding.kt:3`; called at `E2eeMessageCodec.kt:71`), so a ciphertext cannot be replayed under a different message
 identity without failing the GCM tag check.
 
-## Encoding a message (`E2eeMessageCodec.encode`, `E2eeMessageCodec.kt:29`)
+## Encoding a message (`E2eeMessageCodec.encode`, `E2eeMessageCodec.kt:38`)
 
 Goal: produce a `RemoteMessageDto` that carries ciphertext instead of plaintext when the
 conversation is encryptable, and gracefully fall back to plaintext when it is not.
@@ -65,54 +66,64 @@ conversation is encryptable, and gracefully fall back to plaintext when it is no
 2. Resolve the partner (`ParticipantResolver.partnerOf`) and ensure a peer public key
    (`peerKeyRegistry.ensurePeerKey`); if either is missing, send plaintext - unless the message
    already has encrypted media, in which case it refuses to send stranded plaintext
-   (`plainOrFail`, `:70`).
-3. Build a `MessagePayload` (text + reply snippet + per-item `MediaSecret` file keys), derive the
+   (`plainOrFail`, `:87`). A voice clip with a file key counts as encrypted media here.
+3. Build a `MessagePayload` (text + reply snippet + per-item `MediaSecret` file keys, or for a
+   voice clip a `ClipSecret(key, waveform)` from `Clip.toSecret()`, `:119`), derive the
    conversation key, and encrypt the JSON payload.
 4. Return the DTO with cleared plaintext fields and `enc = 1`, `ciphertext`, `nonce`,
-   `senderEpoch`, `recipientEpoch`, `recipientId`. BlurHashes are also stripped from the
-   plaintext side and carried inside the encrypted payload.
+   `senderEpoch`, `recipientEpoch`, `recipientId`. BlurHashes and a clip's waveform are also
+   stripped from the plaintext side and carried inside the encrypted payload. See
+   [[Voice Messages]].
 
-## Decoding (`E2eeMessageCodec.decode`, `E2eeMessageCodec.kt:77`)
+## Decoding (`E2eeMessageCodec.decode`, `E2eeMessageCodec.kt:94`)
 
-If `enc != 1`, decode as plaintext. Otherwise `decryptPayload` (`:94`) works out which epochs
+If `enc != 1`, decode as plaintext. Otherwise `decryptPayload` (`:129`) works out which epochs
 apply based on whether this device is the sender or recipient, loads the matching peer key
 (`cachedPeerKey` then `peerKeyForEpoch`), derives the key, and decrypts. If anything fails
-(missing key, wrong epoch, tag mismatch) it returns an `undecryptable` placeholder message
-("Encrypted message", `UNDECRYPTABLE_TEXT`, `:124`) rather than throwing - the UI shows a
-placeholder instead of crashing.
+(missing key, wrong epoch, tag mismatch) it first refetches the peer's published key for that
+epoch once (`retryWithFreshPeerKey`, throttled per peer and epoch), and if that also fails returns
+an `undecryptable` placeholder message (`:169`) rather than throwing. Since 0.1.13.1 the
+placeholder says what happened - "Message cannot be decrypted on this device"
+(`UNDECRYPTABLE_TEXT`, `:181`) - instead of the old "Encrypted message".
 
 ## Peer key registry and epochs
 
-`PeerKeyRegistry` (`PeerKeyRegistry.kt:15`) stores each user's public keys under Firestore
+`PeerKeyRegistry` (`PeerKeyRegistry.kt:14`) stores each user's public keys under Firestore
 `users/{uid}/keys/{epoch}` and caches them locally as `ObxPeerKey` rows (unique on
-`"uid:epoch"`, `data/local/obx/ObxEntities.kt:107`).
-- `publishIfNeeded` (`:21`) uploads this device's current public key/epoch if the remote copy
-  differs.
-- `ensurePeerKey` (`:37`) returns a cached key when fresh (< 30 min, `REFRESH_MS`), else fetches
+`"uid:epoch"`, `data/local/obx/ObxPeerKey.kt:10`).
+- `publishIfNeeded` (`PeerKeyRegistry.kt:20`) uploads this device's current public key/epoch if
+  it is not published yet. If that epoch is already published with a different key (a
+  regenerated identity restarts at epoch 1), it rotates the local identity to an epoch above the
+  server's highest instead of overwriting, so peers holding the old key keep decrypting history.
+- `ensurePeerKey` (`:64`) returns a cached key when fresh (< 30 min, `REFRESH_MS`), else fetches
   the latest epoch from Firestore and stores it.
-- `peerKeyForEpoch` (`:51`) fetches a specific historical epoch so old messages remain
-  decryptable after a rotation.
-- `setVerified` (`:63`) marks a peer key verified (used by safety-number verification).
+- `peerKeyForEpoch` (`:78`) fetches a specific historical epoch so old messages remain
+  decryptable after a rotation; `refreshPeerKey` (`:57`) forces a refetch for the decode retry.
+- `setVerified` (`:90`) marks a peer key verified (used by safety-number verification).
 
 Epochs are the rotation mechanism: a new identity key means a new epoch; keys are stored
 per-epoch so re-keying does not break history. Startup publish is driven by `E2eeBootstrap`
 (`E2eeBootstrap.kt:19`), which on its own `@Singleton` IO scope calls `publishIfNeeded` from
-`MessengerApplication.onCreate` (`MessengerApplication.kt:102`).
+`MessengerApplication.onCreate` (`MessengerApplication.kt:108`).
 
 ## Identity keys at rest
 
 `IdentityKeyStore` (constructed at `filesDir/e2ee`, `di/CryptoModule.kt:33`) holds the device's
 long-term X25519 key pair and epoch; the private key is wrapped by `KeystoreKeyWrapper` using the
 Android Keystore, so it is not stored in the clear. `getOrCreate(uid)` lazily creates the pair on
-first use.
+first use. Deleting the account removes the identity key file (`identity_v1_<uid>.bin`) through
+`ISessionCleaner.clearOnDelete`; a plain logout keeps it (see [[Settings]]).
 
 ## Media encryption
 
 When a conversation is encryptable, `MediaRepositoryImpl.uploadAndSend`
-(`data/repository/MediaRepositoryImpl.kt:176`) generates a per-file key with
+(`data/repository/MediaRepositoryImpl.kt:148`) generates a per-file key with
 `MediaCipher.generateFileKey()`, encrypts the file before upload, and puts the key into the
 message's `MediaSecret` payload (so it is itself E2E-protected). Download decrypts with that key
-(`downloadMedia`, `:75`). See [[Chat and Messaging]].
+(`downloadMedia`, `:72`). Voice clips use the same per-file scheme through
+`ClipRepositoryImpl`, with the key in `ClipSecret`. `MediaCipher.decrypt` writes to a unique
+`.part` file and moves it into place atomically, so a failed decrypt never leaves a broken file
+under the final name. See [[Chat and Messaging]] and [[Voice Messages]].
 
 ## Safety numbers
 
