@@ -24,10 +24,12 @@ object. Missed/ended/unreached calls become chat messages and feed a call-histor
 
 ## Agora RTC
 
-Dependency `io.agora.rtc:full-sdk:4.6.3` declared directly in `app/build.gradle.kts:174`
+Dependency `io.agora.rtc:full-sdk:4.6.3` declared directly in `app/build.gradle.kts:170`
 (not in the version catalog). The full SDK is used because video needs the native video
-modules; the App ID resolves from `local.properties` -> Gradle property -> placeholder into
-`BuildConfig.AGORA_APP_ID` (`app/build.gradle.kts:22`, `:43`).
+modules; the App ID resolves from `local.properties` -> Gradle property -> empty string into
+`BuildConfig.AGORA_APP_ID` (`app/build.gradle.kts:18`, `:39`). No App ID is committed to the
+repo. Without one the build still succeeds and the app still launches: `AgoraCallService` logs an
+error and leaves the engine `null`, so calls simply do not connect.
 
 `AgoraCallService` creates one `RtcEngine` in its `init` (`AgoraCallService.kt:106`) and adapts
 the `IRtcEngineEventHandler` callbacks into the domain `CallEventListener`
@@ -88,7 +90,7 @@ holder goes null it plays a short "call ended" state and routes the exit via a
 `Channel<CallExit>` (`receiveAsFlow()`, `:52`) - Pop, or OpenChat for an answered incoming call.
 User actions are thin `startService` intents to the foreground service (`acceptCall`,
 `endCall`, `toggleMute`, `switchCamera`, ...). Video surfaces bind directly to Agora via
-`bindLocalVideo`/`bindRemoteVideo` (`AgoraCallService.kt:200`, `:206`). Starting an outgoing call
+`bindLocalVideo`/`bindRemoteVideo` (`AgoraCallService.kt:198`, `:204`). Starting an outgoing call
 (`startOutgoing`, `CallViewModel.kt:174`) builds a `TelecomCallMeta`, starts the foreground service, and places
 the call through Telecom.
 

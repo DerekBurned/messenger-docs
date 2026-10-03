@@ -238,9 +238,14 @@ class AgoraCallService @Inject constructor(@ApplicationContext private val ctx: 
     }
 
     init {
-        require(BuildConfig.AGORA_APP_ID.isNotBlank())
-        val config = RtcEngineConfig().apply { mContext = ctx; mAppId = BuildConfig.AGORA_APP_ID; mEventHandler = handler }
-        engine = RtcEngine.create(config)?.also { it.enableAudio() }
+        if (BuildConfig.AGORA_APP_ID.isBlank()) {
+            Log.e(TAG, "BuildConfig.AGORA_APP_ID is missing. Set AGORA_APP_ID in local.properties or as a Gradle property.")
+        } else try {
+            val config = RtcEngineConfig().apply { mContext = ctx; mAppId = BuildConfig.AGORA_APP_ID; mEventHandler = handler }
+            engine = RtcEngine.create(config)?.also { it.enableAudio() }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to create Agora RtcEngine", t)
+        }
     }
 
     override fun joinChannel(channelName: String, uid: Int, token: String?) {

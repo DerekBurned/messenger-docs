@@ -143,7 +143,7 @@ BOM `34.10.0` (`gradle/libs.versions.toml:13`) керує версіями Fireb
   `SyncAllDataUseCase` і повертає `Result.retry()` за збою, тож WorkManager відкладає повтор.
 - `NetworkObserver` / `INetworkObserver` - Flow зв'язності, який використовує координатор.
 
-`@HiltWorker` потребує `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:139`) і
+`@HiltWorker` потребує `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:135`) і
 `HiltWorkerFactory`, зв'язаного через `MessengerApplication` `Configuration.Provider`
 (`MessengerApplication.kt:140`); інакше WorkManager не може сконструювати воркер із його
 залежністю `SyncAllDataUseCase`.

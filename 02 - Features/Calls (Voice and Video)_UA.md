@@ -28,10 +28,12 @@ tags:
 
 ## Agora RTC
 
-Залежність `io.agora.rtc:full-sdk:4.6.3`, оголошена напряму в `app/build.gradle.kts:174`
+Залежність `io.agora.rtc:full-sdk:4.6.3`, оголошена напряму в `app/build.gradle.kts:170`
 (не в каталозі версій). Повний SDK, бо відео потребує нативних відеомодулів; App ID резолвиться з
-`local.properties` -> Gradle-property -> плейсхолдер у `BuildConfig.AGORA_APP_ID`
-(`app/build.gradle.kts:22`, `:43`).
+`local.properties` -> Gradle-property -> порожній рядок у `BuildConfig.AGORA_APP_ID`
+(`app/build.gradle.kts:18`, `:39`). У репозиторії App ID не зберігається. Без нього збірка все одно
+проходить і застосунок запускається: `AgoraCallService` пише помилку в лог і залишає двигун `null`,
+тож дзвінки просто не з'єднуються.
 
 `AgoraCallService` створює один `RtcEngine` у своєму `init` (`AgoraCallService.kt:106`) і адаптує
 колбеки `IRtcEngineEventHandler` у доменний `CallEventListener` (`AgoraCallService.kt:25`):
@@ -90,7 +92,7 @@ mute/speaker/camera. Основне:
 стан "дзвінок завершено" й маршрутизує вихід через `Channel<CallExit>` (`receiveAsFlow()`, `:52`) -
 Pop, або OpenChat для прийнятого вхідного дзвінка. Дії користувача - тонкі `startService`-intent'и
 до foreground-сервісу (`acceptCall`, `endCall`, `toggleMute`, `switchCamera`, ...). Відеоповерхні
-прив'язуються напряму до Agora через `bindLocalVideo`/`bindRemoteVideo` (`AgoraCallService.kt:200`, `:206`). Старт
+прив'язуються напряму до Agora через `bindLocalVideo`/`bindRemoteVideo` (`AgoraCallService.kt:198`, `:204`). Старт
 вихідного дзвінка (`startOutgoing`, `CallViewModel.kt:174`) будує `TelecomCallMeta`, стартує foreground-сервіс і розміщує
 дзвінок через Telecom.
 

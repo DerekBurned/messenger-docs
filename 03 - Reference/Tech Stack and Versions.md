@@ -20,14 +20,14 @@ catalog - Agora and core-splashscreen are declared with an inline version (noted
 | Android Gradle Plugin | 9.1.1 | `libs.versions.toml:2` |
 | Kotlin | 2.3.10 | `libs.versions.toml:3` |
 | KSP | 2.3.9 | `libs.versions.toml:38` |
-| compileSdk / targetSdk / minSdk | 37 / 36 / 29 | `app/build.gradle.kts:16`, `:34`, `:33` |
-| Java source/target | 21 | `app/build.gradle.kts:60` |
+| compileSdk / targetSdk / minSdk | 37 / 36 / 29 | `app/build.gradle.kts:16`, `:30`, `:29` |
+| Java source/target | 21 | `app/build.gradle.kts:56` |
 
 Plugins applied (`app/build.gradle.kts:3`): android-application, kotlin-compose,
 kotlin-serialization, KSP, google-services, hilt-android, kotlin-kapt (via
 `com.android.legacy-kapt`, needed for ObjectBox's annotation processor under AGP 9,
 `libs.versions.toml:163`), objectbox. Release build has R8 minify + resource shrink on
-(`app/build.gradle.kts:50`) and is signed with the debug key for now.
+(`app/build.gradle.kts:46`) and is signed with the debug key for now.
 
 The Gradle configuration cache is **not** enabled: the ObjectBox 5.4.2 Gradle plugin does not
 support it, and the 6.0.0 line that does was still in beta when this was checked. The ObjectBox
@@ -46,7 +46,7 @@ material-icons-extended, foundation, runtime-saveable, activity-compose, and the
 lifecycle-runtime-compose / lifecycle-viewmodel-compose integrations. The Haze blur library
 (`dev.chrisbanes.haze:haze`) was declared but never used and was removed in 0.1.13.1; the frosted
 look comes from translucent token colors. `androidx.core:core-splashscreen` `1.0.1`
-(`libs.versions.toml:121`, used at `app/build.gradle.kts:151`) provides the launch splash via
+(`libs.versions.toml:121`, used at `app/build.gradle.kts:147`) provides the launch splash via
 `installSplashScreen()` in `MainActivity`. See [[Presentation Layer (MVI)]] and
 [[Appearance and Theming]].
 
@@ -101,11 +101,13 @@ comparing `storage.rules` with the console).
 
 ## Calls - Agora RTC
 
-`io.agora.rtc:full-sdk:4.6.3`, declared directly in `app/build.gradle.kts:174` (not in the
+`io.agora.rtc:full-sdk:4.6.3`, declared directly in `app/build.gradle.kts:170` (not in the
 catalog). Full SDK because video needs the native video modules (it is also most of the APK
-size). App ID via `BuildConfig.AGORA_APP_ID` (`app/build.gradle.kts:22`, `:43`), resolved from
-`local.properties`, then a Gradle project property, then a non-working placeholder so the build
-never fails. `jniLibs { useLegacyPackaging = true }` and an
+size). App ID via `BuildConfig.AGORA_APP_ID` (`app/build.gradle.kts:18`, `:39`), resolved from
+`local.properties`, then a Gradle project property (`-PAGORA_APP_ID` or
+`ORG_GRADLE_PROJECT_AGORA_APP_ID`), then an empty string. No App ID is committed: until
+2026-10-03 the last fallback was the real App ID hardcoded in the build file, so it is still in
+older git history. A build without one succeeds and the app launches, but calls do not connect. `jniLibs { useLegacyPackaging = true }` and an
 `androidx.concurrent` force in the resolution strategy support it. See
 [[Calls (Voice and Video)]].
 
@@ -136,7 +138,7 @@ WorkManager `2.11.2` (`libs.versions.toml:31`) with `hilt-work` `1.3.0` - the pe
 ## Testing
 
 JUnit 5 (Jupiter) `5.11.4` (`libs.versions.toml:52`) on `useJUnitPlatform()`
-(`app/build.gradle.kts:87`), AssertK `0.28.1`, Turbine `1.2.0` (Flow testing), MockK `1.13.13`,
+(`app/build.gradle.kts:83`), AssertK `0.28.1`, Turbine `1.2.0` (Flow testing), MockK `1.13.13`,
 `kotlinx-coroutines-test`, `androidx.test:core`, with hand-written fakes in
 `app/src/test/.../testutil/fakes/`. At 0.1.13.1 that is 45 test classes, 236 tests. Robolectric
 `4.14.1` is still declared but no test uses it.
@@ -149,10 +151,10 @@ com.example.messenger.test/androidx.test.runner.AndroidJUnitRunner`, not with
 
 ## Notable build-config details
 
-- `resolutionStrategy` (`app/build.gradle.kts:96`) forces `androidx.concurrent:*` to 1.2.0 and
+- `resolutionStrategy` (`app/build.gradle.kts:92`) forces `androidx.concurrent:*` to 1.2.0 and
   pins `kotlin-stdlib` to the compiler version, because the media libs transitively pull a newer
   stdlib whose metadata the 2.3.10 toolchain + Hilt processor cannot read.
-- `buildConfig = true` and `AGORA_APP_ID` `buildConfigField` (`app/build.gradle.kts:43`).
+- `buildConfig = true` and `AGORA_APP_ID` `buildConfigField` (`app/build.gradle.kts:39`).
 
 ## Related
 

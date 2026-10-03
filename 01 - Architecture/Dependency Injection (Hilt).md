@@ -3,7 +3,7 @@
 ## What and version
 
 Hilt `2.59.2` (`gradle/libs.versions.toml:19`), processed via KSP
-(`app/build.gradle.kts:135`, `ksp(libs.hilt.compiler)`). The Hilt Gradle plugin is applied at
+(`app/build.gradle.kts:131`, `ksp(libs.hilt.compiler)`). The Hilt Gradle plugin is applied at
 `app/build.gradle.kts:9` (`alias(libs.plugins.hilt.android)`). `androidx.hilt:hilt-navigation-compose` `1.3.0` supplies
 `hiltViewModel()` for Compose, and `androidx.hilt:hilt-work` + `androidx.hilt:hilt-compiler`
 supply `@HiltWorker` support.

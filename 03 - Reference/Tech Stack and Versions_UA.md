@@ -24,14 +24,14 @@ core-splashscreen оголошені з версією напряму (позн�
 | Android Gradle Plugin | 9.1.1 | `libs.versions.toml:2` |
 | Kotlin | 2.3.10 | `libs.versions.toml:3` |
 | KSP | 2.3.9 | `libs.versions.toml:38` |
-| compileSdk / targetSdk / minSdk | 37 / 36 / 29 | `app/build.gradle.kts:16`, `:34`, `:33` |
-| Java source/target | 21 | `app/build.gradle.kts:60` |
+| compileSdk / targetSdk / minSdk | 37 / 36 / 29 | `app/build.gradle.kts:16`, `:30`, `:29` |
+| Java source/target | 21 | `app/build.gradle.kts:56` |
 
 Застосовані плагіни (`app/build.gradle.kts:3`): android-application, kotlin-compose,
 kotlin-serialization, KSP, google-services, hilt-android, kotlin-kapt (через
 `com.android.legacy-kapt`, потрібен для процесора анотацій ObjectBox під AGP 9,
 `libs.versions.toml:163`), objectbox. Release-збірка має R8-minify + shrink ресурсів увімкненими
-(`app/build.gradle.kts:50`) і поки що підписується debug-ключем.
+(`app/build.gradle.kts:46`) і поки що підписується debug-ключем.
 
 Кеш конфігурації Gradle **не** увімкнено: Gradle-плагін ObjectBox 5.4.2 його не підтримує, а лінія
 6.0.0, що підтримує, на момент перевірки ще була в beta. Файл моделі ObjectBox
@@ -49,7 +49,7 @@ material-icons-extended, foundation, runtime-saveable, activity-compose та і�
 lifecycle-runtime-compose / lifecycle-viewmodel-compose. Бібліотеку розмиття Haze
 (`dev.chrisbanes.haze:haze`) було оголошено, але ніде не використано; її прибрано в 0.1.13.1 -
 "матовий" вигляд дають напівпрозорі кольори токенів. `androidx.core:core-splashscreen` `1.0.1`
-(`libs.versions.toml:121`, використано в `app/build.gradle.kts:151`) дає заставку запуску через
+(`libs.versions.toml:121`, використано в `app/build.gradle.kts:147`) дає заставку запуску через
 `installSplashScreen()` у `MainActivity`. Див. [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]]
 та [[Appearance and Theming_UA|Вигляд і теми]].
 
@@ -105,11 +105,13 @@ Cloud Functions (`functions/`, TypeScript, Node 20, `firebase-functions` 6, `fir
 
 ## Дзвінки - Agora RTC
 
-`io.agora.rtc:full-sdk:4.6.3`, оголошений напряму в `app/build.gradle.kts:174` (не в каталозі).
+`io.agora.rtc:full-sdk:4.6.3`, оголошений напряму в `app/build.gradle.kts:170` (не в каталозі).
 Повний SDK, бо відео потребує нативних відеомодулів (він же - більша частина розміру APK). App ID
-через `BuildConfig.AGORA_APP_ID` (`app/build.gradle.kts:22`, `:43`), що береться з
-`local.properties`, потім із Gradle project property, потім із непрацюючого плейсхолдера, щоб
-збірка ніколи не падала.
+через `BuildConfig.AGORA_APP_ID` (`app/build.gradle.kts:18`, `:39`), що береться з
+`local.properties`, потім із Gradle project property (`-PAGORA_APP_ID` або
+`ORG_GRADLE_PROJECT_AGORA_APP_ID`), потім порожній рядок. App ID у репозиторії не зберігається: до
+2026-10-03 останнім фолбеком був справжній App ID, захардкоджений у build-файлі, тож у старій історії
+git він досі є. Збірка без нього проходить і застосунок запускається, але дзвінки не з'єднуються.
 `jniLibs { useLegacyPackaging = true }` і force `androidx.concurrent` у стратегії розв'язання
 підтримують його. Див. [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]].
 
@@ -139,7 +141,7 @@ foreground/background на основі `ProcessLifecycleOwner`. Див. [[Data 
 ## Тестування
 
 JUnit 5 (Jupiter) `5.11.4` (`libs.versions.toml:52`) на `useJUnitPlatform()`
-(`app/build.gradle.kts:87`), AssertK `0.28.1`, Turbine `1.2.0` (тестування Flow), MockK `1.13.13`,
+(`app/build.gradle.kts:83`), AssertK `0.28.1`, Turbine `1.2.0` (тестування Flow), MockK `1.13.13`,
 `kotlinx-coroutines-test`, `androidx.test:core`, з рукописними фейками в
 `app/src/test/.../testutil/fakes/`. На 0.1.13.1 це 45 тестових класів, 236 тестів. Robolectric
 `4.14.1` досі оголошено, але жоден тест його не використовує.
@@ -152,10 +154,10 @@ com.example.messenger.test/androidx.test.runner.AndroidJUnitRunner`, а не ч�
 
 ## Помітні деталі build-конфігурації
 
-- `resolutionStrategy` (`app/build.gradle.kts:96`) форсить `androidx.concurrent:*` до 1.2.0 і пінить
+- `resolutionStrategy` (`app/build.gradle.kts:92`) форсить `androidx.concurrent:*` до 1.2.0 і пінить
   `kotlin-stdlib` до версії компілятора, бо медіа-бібліотеки транзитивно тягнуть новіший stdlib,
   метадані якого набір інструментів 2.3.10 + процесор Hilt не можуть прочитати.
-- `buildConfig = true` і `buildConfigField` `AGORA_APP_ID` (`app/build.gradle.kts:43`).
+- `buildConfig = true` і `buildConfigField` `AGORA_APP_ID` (`app/build.gradle.kts:39`).
 
 ## Пов'язане
 

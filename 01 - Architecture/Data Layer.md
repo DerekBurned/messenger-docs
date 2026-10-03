@@ -138,7 +138,7 @@ When a write cannot reach Firestore, the repository enqueues an `ObxSyncQueueIte
   to `SyncAllDataUseCase` and returns `Result.retry()` on failure so WorkManager backs off.
 - `NetworkObserver` / `INetworkObserver` - a Flow of connectivity used by the coordinator.
 
-`@HiltWorker` needs `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:139`) and the
+`@HiltWorker` needs `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:135`) and the
 `HiltWorkerFactory` wired via `MessengerApplication` `Configuration.Provider`
 (`MessengerApplication.kt:140`); otherwise WorkManager cannot construct the worker with its
 `SyncAllDataUseCase` dependency.
