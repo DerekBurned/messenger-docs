@@ -69,8 +69,9 @@ class FcmTokenSyncer @Inject constructor(
 
 ## 2. MyFirebaseMessagingService
 
-`data/remote/firebase/MyFirebaseMessagingService.kt` in full - the FCM receiver. It is
-OS-constructed, so it reaches Hilt via a manual `@EntryPoint`.
+`data/remote/firebase/MyFirebaseMessagingService.kt` - the FCM receiver (logging trimmed,
+named arguments and fully qualified names condensed). It is OS-constructed, so it reaches Hilt via
+a manual `@EntryPoint`.
 
 ```kotlin
 @EntryPoint
@@ -128,7 +129,13 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                     .onFailure { Log.w(TAG, "persistIncomingMessage failed", it) }
             }
             if (CurrentConversationHolder.isOpen(conversationId)) return@launch
+            val clipLabel = clipLabelFor(
+                msgType = resolved.type,
+                voice = getString(R.string.clip_voice_message),
+                video = getString(R.string.clip_video_message),
+            )
             val body = when {
+                clipLabel != null -> clipLabel
                 message is Message.Text && message.text != E2eeMessageCodec.UNDECRYPTABLE_TEXT -> message.text
                 message is Message.Media -> message.caption.ifBlank { "Media" }
                 dto.enc == 1 -> "New message"
@@ -158,6 +165,17 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     companion object { private const val TYPE_MESSAGE = "message"; private const val TYPE_CALL = "call" }
+}
+```
+
+The clip label comes from a pure helper in `data/remote/firebase/IncomingMessagePayload.kt`,
+covered by `IncomingMessagePayloadTest`:
+
+```kotlin
+fun clipLabelFor(msgType: String, voice: String, video: String): String? = when (msgType) {
+    Message.TYPE_VOICE_CLIP -> voice
+    Message.TYPE_VIDEO_CLIP -> video
+    else -> null
 }
 ```
 

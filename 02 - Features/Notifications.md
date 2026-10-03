@@ -19,15 +19,18 @@ path.
 
 The FCM token is written to the user's Firestore document so senders (Cloud Functions,
 `functions/`) can target the device. On login, `AuthViewModel.syncFcmTokenForCurrentUser`
-(`presentation/viewmodel/AuthViewModel.kt:202`) fetches and stores it; `onNewToken`
+(`presentation/viewmodel/AuthViewModel.kt:259`) fetches and stores it; `onNewToken`
 (`MyFirebaseMessagingService.kt:36`) re-syncs on rotation; `FcmTokenSyncer.start()` (from
 `MessengerApplication.onCreate`) keeps it current. `FirestoreService.updateFcmToken` /
-`deleteFcmToken` (`FirestoreService.kt:73`, `:84`) do the writes.
+`deleteFcmToken` (`FirestoreService.kt:111`, `:122`) do the writes. On logout
+`AndroidSessionCleaner.clearOnLogout` deletes the token in Firestore and on the device
+(`FirebaseMessaging.deleteToken()`) and cancels every posted notification, so the previous
+account's chats neither keep arriving nor stay in the shade (see [[Authentication]]).
 
 ## Receiving a message push
 
 `MyFirebaseMessagingService` is constructed by the OS, so it uses a manual Hilt `@EntryPoint`
-(`FcmEntryPoint`, `MyFirebaseMessagingService.kt:23`) to reach the graph - see
+(`FcmEntryPoint`, `MyFirebaseMessagingService.kt:25`) to reach the graph - see
 [[Dependency Injection (Hilt)]]. `onMessageReceived` (`:53`) ignores pushes when no user is
 signed in and dispatches on `data["type"]`:
 
@@ -41,15 +44,23 @@ signed in and dispatches on `data["type"]`:
   3. persists text messages locally with `messageRepository.persistIncomingMessage` (`:100`) so
      the message is in ObjectBox even though the app was backgrounded (offline delivery), then
   4. if the conversation is not currently open (`CurrentConversationHolder.isOpen`, `:103`),
-     posts a notification via `ChatNotifier.notifyIncoming` with the decrypted body (or a
-     generic "New message" when it could not be decrypted).
-- `call` -> `handleCallPayload` (`:125`): starts `CallForegroundService` with an incoming
+     posts a notification via `ChatNotifier.notifyIncoming`. The body is chosen in order: a voice
+     or video clip gets its label (`clipLabelFor` in `IncomingMessagePayload.kt`, mapped to
+     `R.string.clip_voice_message` / `clip_video_message`, `:104`); a decrypted text its text
+     (never the undecryptable placeholder); media its caption or "Media"; an encrypted message
+     that could not be decrypted "New message"; otherwise the server's `preview`.
+- `call` -> `handleCallPayload` (`:131`): starts `CallForegroundService` with an incoming
   intent and registers a Telecom incoming connection. See [[Calls (Voice and Video)]].
 - anything else -> a fallback notification from the FCM `notification` block.
 
-`CurrentConversationHolder` is set by `ChatScreen` while open
-(`presentation/screens/ChatScreen.kt:129`), which is how the "do not notify for the chat I am
-looking at" rule works.
+`CurrentConversationHolder` is set by `ChatScreenWithNav` while open
+(`presentation/screens/chat/ChatScreenWithNav.kt:144`), which is how the "do not notify for the
+chat I am looking at" rule works.
+
+The server side is the `onMessageCreated` Cloud Function. It sends the data push with a
+`preview`: a clip type maps through `CLIP_PREVIEWS` to "Voice message" / "Video message"
+(`functions/src/index.ts:19`), an encrypted message gets an empty preview, and plain text is cut
+to 200 characters. See [[Voice Messages]].
 
 ## Building the notification (ChatNotifier)
 
@@ -78,15 +89,16 @@ inline reply.
 (`bubbleMetadata`, `:177`) pointing at `BubbleActivity`, with `setAutoExpandBubble(true)` and
 `setSuppressNotification(true)`. Bubbles require a matching dynamic shortcut and `LocusId`, which
 `ConversationShortcuts.push` provides. The chat opened inside the bubble is the same Compose chat
-UI hosted by `BubbleActivity`.
+UI hosted by `BubbleActivity`, which finishes at once when nobody is signed in and closes itself
+when the session ends (see [[Chat and Messaging]]).
 
 ## Channels and permission
 
 `NotificationChannels.ensureCreated` runs from `MessengerApplication.onCreate`
-(`MessengerApplication.kt:94`) and defines the channels used above
+(`MessengerApplication.kt:100`) and defines the channels used above
 (`CHAT_MESSAGES`, `INCOMING_CALL`, `ONGOING_CALL`). `NotificationPermission` /
-`NotificationPermissionGate` request the runtime notification permission after auth
-(`presentation/navigation/navigation.kt:98`).
+`NotificationPermissionGate` request the runtime notification permission once the session is
+`Active` (`presentation/navigation/graph/AppNavigation.kt:49`).
 
 ## Why this design
 

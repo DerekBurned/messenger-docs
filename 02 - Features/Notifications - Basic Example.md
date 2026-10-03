@@ -52,10 +52,10 @@ fun Context.notify(sender: String, body: String) {
 
 - The receiver is `MyFirebaseMessagingService` (`data/remote/firebase/MyFirebaseMessagingService.kt:32`);
   because the OS constructs it, it reaches the Hilt graph through a manual `@EntryPoint`
-  (`FcmEntryPoint`, `:23`) - see [[Dependency Injection (Hilt)]].
+  (`FcmEntryPoint`, `:25`) - see [[Dependency Injection (Hilt)]].
 - `onMessageReceived` (`:53`) dispatches on `data["type"]`: `message` decrypts (see
   [[End-to-End Encryption]]) and **persists** the message to ObjectBox for offline delivery
-  before notifying; `call` starts the foreground-service call path (see
+  before notifying, with a voice note's body read as "Voice message"; `call` starts the foreground-service call path (see
   [[Calls (Voice and Video)]]).
 - `ChatNotifier` (`presentation/notification/ChatNotifier.kt:30`) adds per-conversation history,
   avatar `Person` icons, dynamic shortcuts + `LocusId`, an `InboxStyle` group summary, and

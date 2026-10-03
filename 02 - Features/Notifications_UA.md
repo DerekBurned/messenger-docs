@@ -22,15 +22,18 @@ MessagingStyle, ярликами й бульбашками розмов, вбу�
 
 FCM-токен записується в документ Firestore користувача, щоб відправники (Cloud Functions,
 `functions/`) могли адресувати пристрій. При вході `AuthViewModel.syncFcmTokenForCurrentUser`
-(`presentation/viewmodel/AuthViewModel.kt:202`) отримує й зберігає його; `onNewToken`
+(`presentation/viewmodel/AuthViewModel.kt:259`) отримує й зберігає його; `onNewToken`
 (`MyFirebaseMessagingService.kt:36`) пересинхронізує при ротації; `FcmTokenSyncer.start()` (з
 `MessengerApplication.onCreate`) тримає його актуальним. `FirestoreService.updateFcmToken` /
-`deleteFcmToken` (`FirestoreService.kt:73`, `:84`) роблять записи.
+`deleteFcmToken` (`FirestoreService.kt:111`, `:122`) роблять записи. При виході
+`AndroidSessionCleaner.clearOnLogout` видаляє токен у Firestore й на пристрої
+(`FirebaseMessaging.deleteToken()`) і скасовує всі опубліковані сповіщення, тож чати попереднього
+акаунта не приходять далі й не лишаються в шторці (див. [[Authentication_UA|Автентифікація]]).
 
 ## Отримання push-повідомлення
 
 `MyFirebaseMessagingService` конструюється ОС, тож він використовує ручний Hilt `@EntryPoint`
-(`FcmEntryPoint`, `MyFirebaseMessagingService.kt:23`), щоб дістатися графа - див.
+(`FcmEntryPoint`, `MyFirebaseMessagingService.kt:25`), щоб дістатися графа - див.
 [[Dependency Injection (Hilt)_UA|Впровадження залежностей (Hilt)]]. `onMessageReceived` (`:53`)
 ігнорує пуші, коли ніхто не увійшов, і диспетчеризує за `data["type"]`:
 
@@ -45,15 +48,23 @@ FCM-токен записується в документ Firestore корист
      (`:100`), тож повідомлення є в ObjectBox, навіть якщо застосунок був у фоні (офлайн-доставка),
      потім
   4. якщо розмова наразі не відкрита (`CurrentConversationHolder.isOpen`, `:103`), постить
-     сповіщення через `ChatNotifier.notifyIncoming` із розшифрованим тілом (або загальним "New
-     message", коли не вдалося розшифрувати).
-- `call` -> `handleCallPayload` (`:125`): стартує `CallForegroundService` з intent-ом вхідного
+     сповіщення через `ChatNotifier.notifyIncoming`. Тіло обирається по черзі: голосовий чи
+     відеокліп отримує свою мітку (`clipLabelFor` в `IncomingMessagePayload.kt`, відображається
+     на `R.string.clip_voice_message` / `clip_video_message`, `:104`); розшифрований текст - свій
+     текст (ніколи не заглушку нерозшифрованого); медіа - підпис або "Media"; зашифроване
+     повідомлення, яке не вдалося розшифрувати, - "New message"; інакше `preview` із сервера.
+- `call` -> `handleCallPayload` (`:131`): стартує `CallForegroundService` з intent-ом вхідного
   дзвінка й реєструє вхідне Telecom-з'єднання. Див. [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]].
 - будь-що інше -> запасне сповіщення з блоку `notification` FCM.
 
-`CurrentConversationHolder` встановлюється `ChatScreen`, поки відкрито
-(`presentation/screens/ChatScreen.kt:129`), і саме так працює правило "не сповіщати про чат, на який
-я дивлюся".
+`CurrentConversationHolder` встановлюється `ChatScreenWithNav`, поки відкрито
+(`presentation/screens/chat/ChatScreenWithNav.kt:144`), і саме так працює правило "не сповіщати
+про чат, на який я дивлюся".
+
+Серверна частина - Cloud Function `onMessageCreated`. Вона надсилає data-пуш із `preview`: тип
+кліпу відображається через `CLIP_PREVIEWS` на "Voice message" / "Video message"
+(`functions/src/index.ts:19`), зашифроване повідомлення отримує порожнє прев'ю, а звичайний текст
+обрізається до 200 символів. Див. [[Voice Messages_UA|Голосові повідомлення]].
 
 ## Побудова сповіщення (ChatNotifier)
 
@@ -82,15 +93,16 @@ URL через Coil із таймаутом 5 с, інакше згенеров�
 (`bubbleMetadata`, `:177`), що вказує на `BubbleActivity`, із `setAutoExpandBubble(true)` та
 `setSuppressNotification(true)`. Бульбашки потребують відповідного динамічного ярлика й `LocusId`,
 що надає `ConversationShortcuts.push`. Чат, відкритий усередині бульбашки, - це той самий Compose UI
-чату, хостований `BubbleActivity`.
+чату, хостований `BubbleActivity`, яка одразу завершується, коли ніхто не ввійшов, і закриває себе,
+коли сесія закінчується (див. [[Chat and Messaging_UA|Чат і обмін повідомленнями]]).
 
 ## Канали й дозвіл
 
 `NotificationChannels.ensureCreated` виконується з `MessengerApplication.onCreate`
-(`MessengerApplication.kt:94`) і визначає канали, використані вище
+(`MessengerApplication.kt:100`) і визначає канали, використані вище
 (`CHAT_MESSAGES`, `INCOMING_CALL`, `ONGOING_CALL`). `NotificationPermission` /
-`NotificationPermissionGate` запитують runtime-дозвіл на сповіщення після автентифікації
-(`presentation/navigation/navigation.kt:98`).
+`NotificationPermissionGate` запитують runtime-дозвіл на сповіщення, щойно сесія стає `Active`
+(`presentation/navigation/graph/AppNavigation.kt:49`).
 
 ## Чому такий дизайн
 
