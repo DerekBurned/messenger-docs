@@ -1,7 +1,7 @@
 # Conversations List - Basic Example
 
 The inherited pattern behind [[Conversations List]], in its plain textbook form - not the real
-`ConversationsViewModel`, but the minimal shape it specialises. Then see
+`ChatsViewModel`, but the minimal shape it specialises. Then see
 [[Conversations List - Code]] for the real thing.
 
 (Teaching comments only; the real source has none.)
@@ -41,15 +41,16 @@ fun observePresence(list: List<Conversation>) = viewModelScope.launch {
 ## How the real code specialises it
 
 - The exact `onStart`/`catch`/`collect` framing is `loadConversations`
-  (`presentation/viewmodel/ConversationsViewModel.kt:62`); the stream is the ObjectBox query
-  refreshed by a Firestore snapshot listener (`FirestoreService.getAllConversations`,
-  `data/remote/firebase/FirestoreService.kt:422`).
+  (`presentation/viewmodel/ChatsViewModel.kt:81`), wrapped in `flatMapLatest` over auth state so
+  a logout cancels the stream; the stream is the ObjectBox query refreshed by a Firestore snapshot
+  listener (`FirestoreService.getAllConversations`, `data/remote/firebase/FirestoreService.kt:493`).
 - The `combine` fan-out is `observeMultiple` in `ObserveUserPresenceUseCase`, driven by
-  `observeParticipantPresence` (`ConversationsViewModel.kt:123`), which cancels the previous
+  `observeParticipantPresence` (`ChatsViewModel.kt:155`), which cancels the previous
   `presenceJob` before resubscribing so a stale participant set cannot leak an observer.
 - Avatars fan out the same way but fetch-once-guarded (`loadParticipantAvatars`,
-  `ConversationsViewModel.kt:84`), and per-user deletion rides `visibleTo` + `clearedAt` instead
-  of server-side copies.
+  `ChatsViewModel.kt:110`), names come from live cached user rows (`observeParticipants`,
+  `:64`) so renamed or deleted peers update, and per-user deletion rides `visibleTo` +
+  `clearedAt` instead of server-side copies.
 
 ## Related
 

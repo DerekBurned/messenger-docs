@@ -1,32 +1,51 @@
 # Conversations List
 
 The chats tab: an offline-first list of conversations with live previews, per-participant
-presence and avatars, unread counts, and swipe actions including the two deletion modes.
+presence and avatars, unread counts, and swipe actions including the two deletion modes. The list
+scrolls under the floating top and tab bars.
 
 ## Pieces
 
-- `ConversationsViewModel` (`presentation/viewmodel/ConversationsViewModel.kt:38`) - plain
-  `ViewModel` with a `MutableStateFlow<ConversationsUiState>` (the method-and-StateFlow style,
-  see [[Presentation Layer (MVI)]]).
+- `ChatsViewModel` (`presentation/viewmodel/ChatsViewModel.kt:35`, formerly
+  `ConversationsViewModel`) - plain `ViewModel` with a `MutableStateFlow<ConversationsUiState>`
+  (the method-and-StateFlow style, see [[Presentation Layer (MVI)]]).
 - Use cases (`domain/usecase/conversation/`): `GetConversationsUseCase`,
   `SyncConversationsUseCase`, `CreateConversationUseCase`, `DeleteConversationUseCase`,
-  `DeleteConversationForEveryoneUseCase`, `ClearConversationForMeUseCase`.
+  `DeleteConversationForEveryoneUseCase`, `ClearConversationForMeUseCase`,
+  `MarkConversationAsReadUseCase`, `MarkConversationAsUnreadUseCase`.
 - `ConversationRepositoryImpl` (`IConversationRepository`) and `ConversationReconciler` in
   `data/repository/`.
-- UI: `ConversationsListScreen` / `ChatsScreen`, rows in `presentation/components/list/`
-  (`ConversationListItem`, `SwipeableConversationRow`).
+- UI: `presentation/screens/chats/` (`ChatsScreen`, `ChatsTabContent`, `ChatsList`, `ChatsEmpty`,
+  `ChatsError`, `ChatsLoading`, `ConversationsListPreview`), rows in
+  `presentation/components/list/` (`ConversationListItem`, `SwipeableConversationRow`).
 
 ## Loading the list
 
-`loadConversations` (`ConversationsViewModel.kt:62`) collects `getConversationsUseCase()` with
-loading/error framing:
+`loadConversations` (`ChatsViewModel.kt:81`) runs the conversation stream inside `flatMapLatest`
+over auth state, with loading/error framing:
 
 ```kotlin
-getConversationsUseCase()
-    .onStart { _uiState.update { it.copy(isLoading = true) } }
-    .catch { e -> _uiState.update { it.copy(isLoading = false, error = e.message?.toUiText()) } }
+observeAuthStateUseCase()
+    .flatMapLatest { user ->
+        if (user == null) {
+            flowOf(emptyList())
+        } else {
+            getConversationsUseCase()
+                .onStart { _uiState.update { it.copy(isLoading = true) } }
+        }
+    }
+    .catch { e ->
+        _uiState.update {
+            it.copy(
+                isLoading = false,
+                error = e.message?.toUiText()
+            )
+        }
+    }
     .collect { conversations ->
-        _uiState.update { it.copy(isLoading = false, conversations = conversations, error = null) }
+        _uiState.update {
+            it.copy(isLoading = false, conversations = conversations, error = null)
+        }
         observeParticipantPresence(conversations)
         loadParticipantAvatars(conversations)
     }
@@ -34,58 +53,85 @@ getConversationsUseCase()
 
 The underlying stream is the local ObjectBox conversation query (offline-first, see
 [[Data Layer]]), refreshed by a Firestore snapshot listener
-(`FirestoreService.getAllConversations`, `data/remote/firebase/FirestoreService.kt:422`) that
+(`FirestoreService.getAllConversations`, `data/remote/firebase/FirestoreService.kt:493`) that
 also reports removed ids and cache state. `onStart` seeds the spinner; `catch` degrades to an
 error state rather than crashing the collect. On every emission the ViewModel fans out to load
 presence and avatars for the participants.
 
+Why `flatMapLatest` over auth state: `ChatsViewModel` is scoped to the Activity, so it outlives a
+logout. Before, its Firestore listener kept running on the old uid and could write the old
+account's conversations back into ObjectBox after logout had reset it. Now signing out switches
+the inner flow to `flowOf(emptyList())`, which cancels the listener and clears the list.
+
+## Peer identity: live user rows, not frozen arrays
+
+`Conversation.participantNames` and `participantAvatars` are written once when the conversation
+is created and never rewritten. Showing them directly meant a renamed peer never updated and a
+deleted account kept its old name and photo. The list now reads peers from the cached user rows:
+
+- `observeParticipants` (`ChatsViewModel.kt:64`) collects `userRepository.observeCachedUsers()`
+  into `ConversationsUiState.participants`.
+- `ChatsList` (`presentation/screens/chats/ChatsList.kt`) picks the live `participant` for each
+  row, falls back to the frozen arrays only until the live value arrives, and computes
+  `partnerDeleted = participant?.deleted == true`. A deleted peer is named "Unknown user" via
+  `resolveDisplayName(..., deleted = true)`, gets no avatar URL (a neutral silhouette), and
+  `ConversationListItem` hides their presence.
+
 ## Presence and avatars per row
 
-- `observeParticipantPresence` (`ConversationsViewModel.kt:123`) cancels any previous
-  `presenceJob`, collects the distinct set of other participants'
-  `observeUserPresenceUseCase.observeMultiple(...)` (a `combine` of per-user presence flows,
-  see [[Presence and Typing]]), and writes a `presenceMap` into state. Cancelling the prior job
-  before resubscribing prevents leaking an observer for a stale participant set.
-- `loadParticipantAvatars` (`ConversationsViewModel.kt:84`) first seeds avatar URLs already
-  embedded in the conversation (`participantAvatars`), then fetches any not-yet-known user via
-  `userRepository.getUserById`, tracking `fetchedUserIds` so each user is fetched once.
-- `observeAliases` (`ConversationsViewModel.kt:53`) refreshes and observes contact aliases so a
-  locally renamed contact shows the custom name.
+- `observeParticipantPresence` (`ChatsViewModel.kt:155`) cancels any previous `presenceJob`,
+  collects the distinct set of other participants'
+  `observeUserPresenceUseCase.observeMultiple(...)` (a `combine` of per-user presence flows, see
+  [[Presence and Typing]]), and writes a `presenceMap` into state. Cancelling the prior job before
+  resubscribing prevents leaking an observer for a stale participant set.
+- `loadParticipantAvatars` (`ChatsViewModel.kt:110`) first seeds avatar URLs already embedded in
+  the conversation (`participantAvatars`), then fetches any not-yet-known user via
+  `userRepository.getUserById`, tracking `fetchedUserIds` so each user is fetched once (a failed
+  fetch is retried next time).
+- `observeAliases` (`ChatsViewModel.kt:72`) refreshes and observes contact aliases so a locally
+  renamed contact shows the custom name.
+
+## Scrolling under the floating bars
+
+The list fills the whole screen and starts under the floating top bar: `ChatsList` gives the
+`LazyColumn` `contentPadding(top = topInset, bottom = 116.dp or 96.dp)` depending on whether the
+tab bar sits at the bottom. Because the content now begins under the bar, the pull-to-refresh
+indicator is passed explicitly and padded by the same `topInset`, so the spinner appears below
+the bar instead of behind it.
 
 ## Creating a conversation
 
-`createConversation(participantId)` (`ConversationsViewModel.kt:176`) calls
-`CreateConversationUseCase`, which finds an existing 1:1 conversation
-(`FirestoreService.findExistingConversation`, `FirestoreService.kt:329`) or creates one seeded
-with `visibleTo = participantIds` (`FirestoreService.createConversation`, `:352`). Search-driven
-creation happens through `SearchResultsOverlay` (see [[Navigation]]), which then navigates to
-the chat.
+`createConversation(participantId)` (`ChatsViewModel.kt:222`) calls `CreateConversationUseCase`,
+which finds an existing 1:1 conversation (`FirestoreService.findExistingConversation`,
+`FirestoreService.kt:400`) or creates one seeded with `visibleTo = participantIds`
+(`FirestoreService.createConversation`, `:423`). Starting a conversation with a deleted account
+is refused. Search-driven creation happens through `SearchResultsOverlay` (see
+[[Search and Suggestions]]), which then navigates to the chat.
 
 ## Deletion: for-me vs for-everyone
 
 Three distinct operations, mirrored at the message level in [[Chat and Messaging]]:
 
-- `deleteForMe(conversationId)` (`ConversationsViewModel.kt:162`) ->
-  `ClearConversationForMeUseCase` -> `FirestoreService.clearConversationForMe`
-  (`FirestoreService.kt:373`): writes `clearedAt.{uid} = now` and removes the uid from
-  `visibleTo`. The conversation disappears from this user's list and messages before the
-  cutoff are hidden locally (`clearedAtForMe` on `ObxConversation`, used as the message cutoff
-  in `MessageRepositoryImpl.cutoffFor`, `data/repository/MessageRepositoryImpl.kt:46`). The
-  other participant is unaffected.
-- `deleteForEveryone(conversationId)` (`ConversationsViewModel.kt:169`) ->
+- `deleteForMe(conversationId)` (`ChatsViewModel.kt:194`) -> `ClearConversationForMeUseCase` ->
+  `FirestoreService.clearConversationForMe` (`FirestoreService.kt:444`): writes
+  `clearedAt.{uid} = now` and removes the uid from `visibleTo`. The conversation disappears from
+  this user's list and messages before the cutoff are hidden locally (`clearedAtForMe` on
+  `ObxConversation`, used as the message cutoff in `MessageRepositoryImpl.cutoffFor`,
+  `data/repository/MessageRepositoryImpl.kt:47`). The other participant is unaffected.
+- `deleteForEveryone(conversationId)` (`ChatsViewModel.kt:201`) ->
   `DeleteConversationForEveryoneUseCase` -> deletes the conversation document for all
   participants.
-- `deleteConversation(conversationId)` (`ConversationsViewModel.kt:144`) ->
-  `DeleteConversationUseCase` -> `FirestoreService.deleteConversation` (`FirestoreService.kt:363`)
-  hard-deletes the document.
+- `deleteConversation(conversationId)` (`ChatsViewModel.kt:176`) -> `DeleteConversationUseCase` ->
+  `FirestoreService.deleteConversation` (`FirestoreService.kt:434`) hard-deletes the document.
 
-`SwipeableConversationRow` surfaces these as swipe actions.
+`SwipeableConversationRow` surfaces these, plus mark read / mark unread (`ChatsViewModel.kt:208`,
+`:215`), as swipe actions.
 
 ## Refresh and errors
 
-`refresh` (`ConversationsViewModel.kt:194`) toggles `isRefreshing` around
-`syncConversationsUseCase()` (a one-shot server pull, `fetchAllConversationsOnce`,
-`FirestoreService.kt:404`, uses `Source.SERVER`). `clearError` resets the error field.
+`refresh` (`ChatsViewModel.kt:240`) toggles `isRefreshing` around `syncConversationsUseCase()` (a
+one-shot server pull, `fetchAllConversationsOnce`, `FirestoreService.kt:475`, uses
+`Source.SERVER`). `clearError` resets the error field.
 
 ## Why this design
 
@@ -93,6 +139,8 @@ Three distinct operations, mirrored at the message level in [[Chat and Messaging
   listener writes through; no blank-while-loading after first run.
 - Fanning presence/avatar loading out of the list stream keeps the row data current without
   bloating the conversation documents.
+- Reading peers from live user rows instead of the denormalised arrays means renames and account
+  deletions reach the list without rewriting every conversation.
 - `visibleTo` + `clearedAt` implement per-user deletion without server-side per-user copies of
   the conversation, and reuse the same cutoff mechanic the message stream already honours.
 
@@ -100,11 +148,13 @@ Three distinct operations, mirrored at the message level in [[Chat and Messaging
 
 ```mermaid
 flowchart TD
-    OBX[(ObjectBox conversations)] --> STREAM[getConversationsUseCase Flow]
+    AUTH[Auth state] -->|flatMapLatest| STREAM[getConversationsUseCase Flow]
+    OBX[(ObjectBox conversations)] --> STREAM
     FS[Firestore snapshot listener] -->|writes through| OBX
-    STREAM -->|onStart loading| VM[ConversationsViewModel]
+    STREAM -->|onStart loading| VM[ChatsViewModel]
     STREAM -->|catch error| VM
     STREAM -->|collect list| VM
+    USERS[(Cached user rows)] -->|observeCachedUsers| VM
     VM --> P[observeParticipantPresence: combine per-user flows]
     VM --> A[loadParticipantAvatars: fetch-once]
     P --> UI[Conversation rows]
@@ -115,4 +165,5 @@ flowchart TD
 ## Related
 
 [[Chat and Messaging]] - [[Presence and Typing]] - [[Data Layer]] -
-[[Presentation Layer (MVI)]] - [[Navigation]] - [[Conversations List - Basic Example]]
+[[Presentation Layer (MVI)]] - [[Navigation]] - [[Search and Suggestions]] - [[Settings]] -
+[[Conversations List - Basic Example]]

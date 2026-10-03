@@ -1,11 +1,11 @@
 # Conversations List - Code
 
 Companion to [[Conversations List]]. The actual source for the conversations list, block by
-block. Snippets are copied verbatim from the repo.
+block. Snippets are copied from the repo; long expressions are sometimes joined onto one line.
 
 Files covered:
 - `presentation/state/ConversationsUiState.kt`
-- `presentation/viewmodel/ConversationsViewModel.kt`
+- `presentation/viewmodel/ChatsViewModel.kt` (formerly `ConversationsViewModel.kt`)
 - Use cases in `domain/usecase/conversation/`
 - `data/repository/ConversationRepositoryImpl.kt`
 - `data/remote/firebase/FirestoreService.kt` (conversation methods; see [[Chat and Messaging - Code]]
@@ -24,32 +24,39 @@ data class ConversationsUiState(
     val presenceMap: Map<String, UserPresence> = emptyMap(),
     val aliases: Map<String, String> = emptyMap(),
     val avatars: Map<String, String?> = emptyMap(),
+    val participants: Map<String, User> = emptyMap(),
     val isRefreshing: Boolean = false,
     val currentUserId: String = "",
 ) : UiState
 ```
 
-The row data is derived by joining `conversations` with three side maps: `presenceMap` (online
-dots), `aliases` (locally renamed contacts), and `avatars` (fetched profile photos). Keeping them
-as separate maps means a presence tick does not rebuild the conversation list itself.
+The row data is derived by joining `conversations` with four side maps: `presenceMap` (online
+dots), `aliases` (locally renamed contacts), `avatars` (fetched profile photos) and
+`participants` (the live cached user rows, which carry the current name and the `deleted` flag).
+Keeping them as separate maps means a presence tick does not rebuild the conversation list
+itself.
 
 ---
 
-## 2. ConversationsViewModel
+## 2. ChatsViewModel
 
-`presentation/viewmodel/ConversationsViewModel.kt` in full - this is the method-and-StateFlow
-style (plain `ViewModel`, no MVI base):
+`presentation/viewmodel/ChatsViewModel.kt` - the method-and-StateFlow style (plain `ViewModel`,
+no MVI base). `deleteConversation` / `createConversation` expand their `fold` over several lines
+in the source:
 
 ```kotlin
 @HiltViewModel
-class ConversationsViewModel @Inject constructor(
+class ChatsViewModel @Inject constructor(
     private val getConversationsUseCase: GetConversationsUseCase,
     private val deleteConversationUseCase: DeleteConversationUseCase,
     private val deleteConversationForEveryoneUseCase: DeleteConversationForEveryoneUseCase,
     private val clearConversationForMeUseCase: ClearConversationForMeUseCase,
+    private val markConversationAsReadUseCase: MarkConversationAsReadUseCase,
+    private val markConversationAsUnreadUseCase: MarkConversationAsUnreadUseCase,
     private val createConversationUseCase: CreateConversationUseCase,
     private val syncConversationsUseCase: SyncConversationsUseCase,
     private val observeUserPresenceUseCase: ObserveUserPresenceUseCase,
+    private val observeAuthStateUseCase: ObserveAuthStateUseCase,
     private val userRepository: IUserRepository,
     private val firebaseAuth: FirebaseAuth
 ) : ViewModel() {
@@ -65,6 +72,15 @@ class ConversationsViewModel @Inject constructor(
     init {
         loadConversations()
         observeAliases()
+        observeParticipants()
+    }
+
+    private fun observeParticipants() {
+        viewModelScope.launch {
+            userRepository.observeCachedUsers().collect { users ->
+                _uiState.update { it.copy(participants = users) }
+            }
+        }
     }
 
     private fun observeAliases() {
@@ -78,8 +94,15 @@ class ConversationsViewModel @Inject constructor(
 
     private fun loadConversations() {
         viewModelScope.launch {
-            getConversationsUseCase()
-                .onStart { _uiState.update { it.copy(isLoading = true) } }
+            observeAuthStateUseCase()
+                .flatMapLatest { user ->
+                    if (user == null) {
+                        flowOf(emptyList())
+                    } else {
+                        getConversationsUseCase()
+                            .onStart { _uiState.update { it.copy(isLoading = true) } }
+                    }
+                }
                 .catch { e -> _uiState.update { it.copy(isLoading = false, error = e.message?.toUiText()) } }
                 .collect { conversations ->
                     _uiState.update { it.copy(isLoading = false, conversations = conversations, error = null) }
@@ -108,8 +131,15 @@ class ConversationsViewModel @Inject constructor(
         fetchedUserIds.addAll(newUserIds)
         viewModelScope.launch {
             newUserIds.forEach { id ->
-                val url = runCatching { userRepository.getUserById(id).getOrNull()?.avatarUrl }.getOrNull()
-                if (url != null) _uiState.update { it.copy(avatars = it.avatars + (id to url)) }
+                val result = runCatching {
+                    userRepository.getUserById(id).getOrNull()?.avatarUrl
+                }
+                val url = result.getOrNull()
+                if (url != null) {
+                    _uiState.update { it.copy(avatars = it.avatars + (id to url)) }
+                } else if (result.isFailure) {
+                    fetchedUserIds.remove(id)
+                }
             }
         }
     }
@@ -150,6 +180,20 @@ class ConversationsViewModel @Inject constructor(
         }
     }
 
+    fun markAsRead(conversationId: String) {
+        viewModelScope.launch {
+            markConversationAsReadUseCase(conversationId)
+                .onFailure { e -> _uiState.update { it.copy(error = e.message?.toUiText()) } }
+        }
+    }
+
+    fun markAsUnread(conversationId: String) {
+        viewModelScope.launch {
+            markConversationAsUnreadUseCase(conversationId)
+                .onFailure { e -> _uiState.update { it.copy(error = e.message?.toUiText()) } }
+        }
+    }
+
     fun createConversation(participantId: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
@@ -175,12 +219,18 @@ Key mechanics:
 
 - `loadConversations` collects the offline-first stream with `onStart` (spinner) and `catch`
   (degrade to error state, do not crash the collect). Each emission fans out to
-  `observeParticipantPresence` and `loadParticipantAvatars`.
+  `observeParticipantPresence` and `loadParticipantAvatars`. The stream sits inside
+  `flatMapLatest` over auth state: this ViewModel is Activity-scoped and outlives a logout, so
+  signing out must cancel the Firestore listener (otherwise it would keep writing the old
+  account's conversations into the freshly reset ObjectBox) and empty the list.
+- `observeParticipants` keeps the live user rows in state; the list prefers them over the frozen
+  `participantNames`/`participantAvatars` arrays, which is how renames and deleted accounts
+  ("Unknown user") reach each row.
 - `observeParticipantPresence` cancels `presenceJob` before resubscribing, so when the set of
   participants changes it does not leak an observer for the old set. `observeMultiple` is a
   `combine` of per-user presence flows (see [[Presence and Typing]]).
 - `loadParticipantAvatars` seeds avatars already embedded in the conversation, then fetches the
-  rest once each (tracked by `fetchedUserIds`).
+  rest once each (tracked by `fetchedUserIds`; a failed fetch is removed so it is tried again).
 - The three delete methods map one-to-one to the three use cases below.
 
 ---
