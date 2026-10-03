@@ -15,7 +15,8 @@ Navigation 3 (`androidx.navigation3` `1.1.3`, `gradle/libs.versions.toml:23`) п
 
 `presentation/navigation/Routes.kt` оголошує кожен пункт призначення як серіалізовний `NavKey`.
 Корені вкладок і сторінки налаштувань - це `data object` (`AuthRoute`, `ChatsRoute`, `CallsRoute`,
-`SettingsRoute`, `PrivacyRoute`, ...); пункти з аргументами - це `data class` (`Routes.kt:55`):
+`SettingsRoute`, `PrivacyRoute`, `DeleteAccountRoute`, ...); пункти з аргументами - це
+`data class` (`Routes.kt:55`, `:73`):
 
 ```kotlin
 @Serializable
@@ -38,15 +39,52 @@ data class CallRoute(
 Аргументи строго типізовані - жодних рядкових ключів у місці виклику, жодного ручного пакування
 bundle під час навігації.
 
+## Шлюз сесії
+
+Навігаційна поверхня живе в `presentation/navigation/graph/`: `AppNavigation.kt`,
+`AuthDisplay.kt`, `MainDisplay.kt`, `ProvideNavArgs.kt` і `ProvideNavAnimatedScope.kt`.
+`AppNavigation` (`AppNavigation.kt:23`) збирає `AuthViewModel.state` і перемикає за
+`authState.session` - це `SessionState` (`domain/model/SessionState.kt:3`):
+
+```kotlin
+when (authState.session) {
+    is SessionState.Active -> MainDisplay(
+        authViewModel = authViewModel,
+        pendingRoute = pendingRoute,
+        onRouteConsumed = onRouteConsumed,
+    )
+
+    is SessionState.SignedOut -> AuthDisplay(authViewModel = authViewModel)
+
+    SessionState.Resolving -> Unit
+}
+```
+
+Раніше він перемикав за голим прапорцем входу Firebase. Вхід із телефоном без профілю у Firestore
+тоді монтував `MainDisplay` ще до перевірки профілю й відкидав назад до щойно скомпонованого
+`AuthDisplay`, втрачаючи введені номер телефону й OTP. `ObserveSessionStateUseCase`
+(`domain/usecase/auth/ObserveSessionStateUseCase.kt:20`) тепер доходить до `Active` лише після
+підтвердження профілю:
+
+- немає користувача Firebase -> `SignedOut()`;
+- триває реєстрація чи вхід (`IAuthFlowGate.isBusy`, `InMemoryAuthFlowGate` у `data/service/`) ->
+  `Resolving`, тож шлюз не втручається посеред потоку;
+- інакше стежить за `userRepository.observeRemoteUser(uid)`: профіль позначено `deleted` ->
+  `SignedOut(ACCOUNT_DELETED)`; профіль є -> `Active(user)`; відсутність, підтверджена сервером
+  (`snapshot.authoritative`) -> `SignedOut(PROFILE_MISSING)`; промах кешу чи помилка -> `Active` з
+  ідентичністю Firebase, тож офлайн-старт ніколи не змушує вийти.
+
+`AuthViewModel.observeSession` (`presentation/viewmodel/AuthViewModel.kt:78`) зберігає сесію в
+стані й для `SignedOut` з причиною запускає `endInvalidSession` (`:87`): від'єднує присутність,
+виконує use case виходу й показує відповідну помилку. Той самий слухач виводить цей пристрій, коли
+акаунт видалено деінде. `Resolving` не рендерить нічого поверх шпалер. Див.
+[[Authentication_UA|Автентифікація]].
+
 ## Стек навігації та NavDisplay
 
-`presentation/navigation/navigation.kt` - це вся навігаційна поверхня. `AppNavigation`
-(`navigation.kt:77`) перемикає за станом автентифікації (зібраним через
-`collectAsStateWithLifecycle`, `navigation.kt:82`) між `AuthDisplay` та `MainDisplay`.
-
-Стек навігації - це стан: `rememberNavBackStack(ChatsRoute)` (`navigation.kt:130`). Навігація - це
+Стек навігації - це стан: `rememberNavBackStack(ChatsRoute)` (`MainDisplay.kt:125`). Навігація - це
 просто мутування того списку - `backStack.add(ChatRoute(...))` щоб запушити,
-`backStack.removeLastOrNull()` щоб виштовхнути. `NavDisplay` (`navigation.kt:205`) рендерить
+`backStack.removeLastOrNull()` щоб виштовхнути. `NavDisplay` (`MainDisplay.kt:267`) рендерить
 верхній запис і анімує переходи:
 
 ```kotlin
@@ -70,15 +108,17 @@ NavDisplay(
   виштовхуванні.
 
 `entryProvider` відображає кожен тип `NavKey` на його composable через `entry<T> { }`
-(`navigation.kt:220` і далі). Перемикання вкладок (`navigateToTab`, `navigation.kt:173`) виштовхує
-некореневі записи, потім міняє корінь, тож вкладки поводяться як односхідцевий перемикач, а не
-стек.
+(`MainDisplay.kt:286` і далі). Перемикання вкладок (`navigateToTab`, `MainDisplay.kt:223`)
+виштовхує некореневі записи, потім міняє корінь, тож вкладки поводяться як односхідцевий
+перемикач, а не стек. До видалення акаунта ведуть із Privacy:
+`PrivacyScreen(onDeleteAccount = { backStack.add(DeleteAccountRoute) })` (`MainDisplay.kt:343`) і
+`entry<DeleteAccountRoute>` (`:346`).
 
 ## Передавання нав-аргументів у SavedStateHandle ViewModel
 
 Записи Navigation 3 не автоматично живлять `SavedStateHandle` для `@HiltViewModel`. Застосунок
-мостить це через `ProvideNavArgs` (`navigation.kt:451`), який обгортає поточний
-`ViewModelStoreOwner` у `NavArgsViewModelStoreOwner` (`navigation.kt:464`), що впроваджує `Bundle`
+мостить це через `ProvideNavArgs` (`ProvideNavArgs.kt:19`), який обгортає поточний
+`ViewModelStoreOwner` у `NavArgsViewModelStoreOwner` (`ProvideNavArgs.kt:32`), що впроваджує `Bundle`
 як `DEFAULT_ARGS_KEY` у `CreationExtras` ViewModel:
 
 ```kotlin
@@ -95,7 +135,7 @@ entry<ChatRoute> { key ->
 ```
 
 Далі за течією `ChatViewModel` читає саме ці ключі зі свого `SavedStateHandle`
-(`presentation/viewmodel/ChatViewModel.kt:62`). `CallViewModel` та `ChatUserProfileViewModel`
+(`presentation/viewmodel/ChatViewModel.kt:80`). `CallViewModel` та `ChatUserProfileViewModel`
 отримують свої аргументи так само. Оскільки значення - це серіалізовані поля маршруту, що течуть
 через `SavedStateHandle`, вони переживають смерть процесу. Див.
 [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]] щодо аспекту смерті процесу.
@@ -103,11 +143,11 @@ entry<ChatRoute> { key ->
 ## Оверлеї дзвінка й пошуку поверх навігації
 
 `MainDisplay` накладає ненавігаційний UI поверх `NavDisplay` у тому ж `Box`:
-- `FloatingTabBar` для коренів вкладок (`navigation.kt:394`),
+- `FloatingTabBar` для коренів вкладок (`MainDisplay.kt:564`),
 - `IncomingCallBar`, докована `ActiveCallBar` та `CallBarOverlay` для активного дзвінка,
   показані/приховані на основі `ActiveCallHolder.state` та `CallBarPresenter.mode`
-  (`navigation.kt:143`, `:412`),
-- `SearchResultsOverlay` під час пошуку у вкладці (`navigation.kt:383`).
+  (`MainDisplay.kt:147`, `:587`),
+- `SearchResultsOverlay` під час пошуку у вкладці (`MainDisplay.kt:521`).
 
 Панелі дзвінка живуть у корені навігації (не всередині екрана), тож вони зберігаються між змінами
 екранів, поки дзвінок активний. Див. [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]].
@@ -115,8 +155,8 @@ entry<ChatRoute> { key ->
 ## Переходи спільних елементів
 
 `MainDisplay` обгортає `NavDisplay` у `SharedTransitionLayout` і надає
-`LocalSharedTransitionScope` / `LocalNavAnimatedVisibilityScope` (`navigation.kt:203`,
-`ProvideNavAnimatedScope`, `:442`), тож аватари й елементи профілю анімуються між списком розмов,
+`LocalSharedTransitionScope` / `LocalNavAnimatedVisibilityScope` (`MainDisplay.kt:264`,
+`ProvideNavAnimatedScope`, `ProvideNavAnimatedScope.kt:10`), тож аватари й елементи профілю анімуються між списком розмов,
 чатом і екранами профілю.
 
 ## Чому такий підхід
@@ -127,9 +167,11 @@ entry<ChatRoute> { key ->
   компілятором.
 - ViewModel-стори на кожен запис через декоратор дають коректні життєві цикли ViewModel без
   окремого скоупу ViewModel для нав-графа.
+- Шлюз за розв'язаним `SessionState` замість прапорця Firebase означає, що основний UI монтується
+  лише для користувача, чий профіль існує, а вхід, що триває, шлюз ніколи не руйнує.
 
 Компроміс: живлення `SavedStateHandle` потребує кастомного мосту
-`ProvideNavArgs`/`NavArgsViewModelStoreOwner` (`navigation.kt:451`-`:481`), що є більшою обв'язкою,
+`ProvideNavArgs`/`NavArgsViewModelStoreOwner` (`ProvideNavArgs.kt`, 49 рядків), що є більшою обв'язкою,
 ніж стара обв'язка `SavedStateHandle` у Navigation-Compose. Обґрунтування вибору Navigation 3 над
 Navigation-Compose не зафіксовано в коді; задокументовано як поточний стан.
 
@@ -137,4 +179,5 @@ Navigation-Compose не зафіксовано в коді; задокумент
 
 [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]] -
 [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]] -
-[[Architecture Overview_UA|Огляд архітектури]] - [[Tech Stack and Versions_UA|Технологічний стек і версії]]
+[[Architecture Overview_UA|Огляд архітектури]] - [[Authentication_UA|Автентифікація]] -
+[[Tech Stack and Versions_UA|Технологічний стек і версії]]
