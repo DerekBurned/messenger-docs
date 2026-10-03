@@ -8,9 +8,11 @@ inherited pattern is [[Appearance and Theming - Basic Example]].
 
 ---
 
-## 1. The persisted settings (`ThemePreferenceStore.kt:17`)
+## 1. The persisted settings (`ThemePreferenceStore.kt:27`)
 
-Three settings live in one DataStore. Reads are cold `Flow`s; writes go through `edit { }`.
+All appearance settings live in one DataStore. Reads are cold `Flow`s; writes go through
+`edit { }`. The theme, background and intensity keys are shown; bar position, text size, font and
+the saved-wallpaper list (`wallpapers_json`) follow the same pattern.
 
 ```kotlin
 private val Context.themeDataStore by preferencesDataStore(name = "theme_prefs")
@@ -19,9 +21,9 @@ private val Context.themeDataStore by preferencesDataStore(name = "theme_prefs")
 class ThemePreferenceStore @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
-    private val themeModeKey  = stringPreferencesKey("theme_mode")
+    private val themeModeKey = stringPreferencesKey("theme_mode")
     private val backgroundKey = stringPreferencesKey("app_background")
-    private val intensityKey  = floatPreferencesKey("theme_intensity")
+    private val intensityKey = floatPreferencesKey("theme_intensity")
 
     val themeMode: Flow<ThemeMode> = context.themeDataStore.data.map { prefs ->
         prefs[themeModeKey]
@@ -55,7 +57,7 @@ drag can preview instantly without a write:
 }
 ```
 
-## 2. Cold flows -> UI state (`AppearanceViewModel.kt:21`)
+## 2. Cold flows -> UI state (`AppearanceViewModel.kt:25`)
 
 `stateIn` gives the screen a value on its first frame; `WhileSubscribed(5_000)` keeps the DataStore
 reader alive briefly across recompositions/rotation.
@@ -75,57 +77,84 @@ class AppearanceViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 1f)
 ```
 
-Importing a wallpaper copies the picked file, drops any previous one, then flips the key
-(`AppearanceViewModel.kt:57`):
+Importing a wallpaper copies the picked file under a new id, adds it to the saved list, then
+selects it (`AppearanceViewModel.kt:81`):
 
 ```kotlin
     fun importWallpaper(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {                     // file IO off the main thread
             runCatching {
-                val dir = File(context.filesDir, "wallpapers").apply { mkdirs() }
-                val timestamp = System.currentTimeMillis()
-                val file = File(dir, "wallpaper_$timestamp.jpg")
+                val id = System.currentTimeMillis().toString()
+                val file = wallpaperFileById(context, id).apply { parentFile?.mkdirs() }
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     file.outputStream().use { output -> input.copyTo(output) }
                 } ?: return@runCatching
-                dir.listFiles()?.filter { it.name != file.name }?.forEach { it.delete() }  // keep one
-                themePreferenceStore.setBackground("$CUSTOM_BACKGROUND_PREFIX$timestamp")
+                val name = "Wallpaper ${wallpapers.value.size + 1}"
+                themePreferenceStore.addWallpaper(SavedWallpaper(id, name))   // keep a library
+                themePreferenceStore.setBackground(backgroundKeyFor(id))       // "custom:<id>"
             }
         }
     }
 ```
 
-## 3. Applying the mode (`Theme.kt:41`)
+## 3. Applying the mode (`Theme.kt:45`)
 
-`MessengerTheme` maps `ThemeMode` to dark/light, selects a `ColorScheme` and token set, and provides
-the tokens through a `CompositionLocal`:
+`MessengerTheme` maps `ThemeMode` to dark/light, selects a `ColorScheme` and token set, builds the
+typography from the text size and font, and provides the tokens and the default content color
+through `CompositionLocal`s:
 
 ```kotlin
 @Composable
-fun MessengerTheme(themeMode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> Unit) {
+fun MessengerTheme(
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    textSize: AppTextSize = AppTextSize.MEDIUM,
+    appFont: AppFont = AppFont.DEFAULT,
+    content: @Composable () -> Unit,
+) {
     val darkTheme = when (themeMode) {
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
-        ThemeMode.LIGHT  -> false
-        ThemeMode.DARK   -> true
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
     }
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
-    val tokens      = if (darkTheme) DarkTokens      else LightTokens
-    CompositionLocalProvider(LocalMessengerTokens provides tokens) {
-        MaterialTheme(colorScheme = colorScheme, typography = Typography,
-            shapes = MessengerMaterialShapes, content = content)
+    val tokens = if (darkTheme) DarkTokens else LightTokens
+    val typography = messengerTypography(scale = textSize.scale, family = appFont.toFontFamily())
+
+    CompositionLocalProvider(
+        LocalMessengerTokens provides tokens,
+        LocalContentColor provides tokens.textPrimary,   // every bare Text reads this
+    ) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = typography,
+            shapes = MessengerMaterialShapes,
+            content = content,
+        )
     }
 }
 ```
 
-The root reads the persisted mode and feeds it in, so a write re-themes everything
-(`MainActivity.kt:65`):
+`LocalContentColor provides tokens.textPrimary` is the 0.1.13.1 contrast fix: without it every
+`Text` with no explicit color fell back to Material's default black, invisible in dark theme.
+
+The root reads the persisted settings and feeds them in, so a write re-themes everything
+(`MainActivity.kt:83`):
 
 ```kotlin
-val themeMode by themePreferenceStore.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
-MessengerTheme(themeMode = themeMode) { /* app */ }
+val themeMode by themePreferenceStore.themeMode
+    .collectAsStateWithLifecycle(initialValue = ThemeMode.SYSTEM)
+val textSize by themePreferenceStore.textSize
+    .collectAsStateWithLifecycle(initialValue = AppTextSize.MEDIUM)
+val appFont by themePreferenceStore.appFont
+    .collectAsStateWithLifecycle(initialValue = AppFont.DEFAULT)
+val barPosition by themePreferenceStore.barPosition
+    .collectAsStateWithLifecycle(initialValue = BarPosition.TOP)
+MessengerTheme(themeMode = themeMode, textSize = textSize, appFont = appFont) {
+  CompositionLocalProvider(LocalTabBarPosition provides barPosition) { /* app */ }
+}
 ```
 
-## 4. The backgrounds (`AppBackgrounds.kt:14`)
+## 4. The backgrounds (`AppBackgrounds.kt:8`)
 
 Six presets, each with dark and light gradient stops, plus the custom-wallpaper key helpers:
 
@@ -145,10 +174,21 @@ fun appBackgroundFor(key: String?): AppBackground =
 
 const val CUSTOM_BACKGROUND_PREFIX = "custom:"
 
+fun backgroundKeyFor(wallpaperId: String): String = "$CUSTOM_BACKGROUND_PREFIX$wallpaperId"
+
+fun wallpaperIdOf(backgroundKey: String): String? =
+    if (backgroundKey.startsWith(CUSTOM_BACKGROUND_PREFIX)) {
+        backgroundKey.removePrefix(CUSTOM_BACKGROUND_PREFIX)
+    } else {
+        null                                                            // not a custom key
+    }
+
+fun wallpaperFileById(context: Context, wallpaperId: String): File =
+    File(File(context.filesDir, "wallpapers"), "wallpaper_$wallpaperId.jpg")
+
 fun customWallpaperFile(context: Context, backgroundKey: String): File? {
-    val timestamp = backgroundKey.removePrefix(CUSTOM_BACKGROUND_PREFIX)
-    if (timestamp == backgroundKey) return null                         // not a custom key
-    return File(File(context.filesDir, "wallpapers"), "wallpaper_$timestamp.jpg")
+    val id = wallpaperIdOf(backgroundKey) ?: return null
+    return wallpaperFileById(context, id)
 }
 ```
 
@@ -177,7 +217,10 @@ if (scrimAlpha > 0.005f) {
 }
 ```
 
-The `UiEntryPoints` seam (`di/UiEntryPoints.kt:11`):
+(In the source the store and the custom file are skipped in `LocalInspectionMode`, so previews
+render the plain gradient.)
+
+The `UiEntryPoints` seam (`di/UiEntryPoints.kt:12`):
 
 ```kotlin
 @EntryPoint
@@ -185,10 +228,11 @@ The `UiEntryPoints` seam (`di/UiEntryPoints.kt:11`):
 interface UiEntryPoints {
     fun userRepository(): IUserRepository
     fun themePreferenceStore(): ThemePreferenceStore
+    fun callService(): ICallService
 }
 ```
 
-## 6. Reusable motion (`MotionModifiers.kt:16`)
+## 6. Reusable motion (`model/MotionSprings.kt:6`, `MotionModifiers.kt`)
 
 Shared spring specs and two `composed` modifiers so every widget gets its own animation state:
 
