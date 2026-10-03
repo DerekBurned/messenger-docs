@@ -11,7 +11,8 @@ tags:
 
 ## Контракт MVI
 
-Три маркерні інтерфейси задають словник (`presentation/base/MviViewModel.kt:15`):
+Три маркерні інтерфейси задають словник, по одному на файл у `presentation/base/mvi/`
+(`UiState.kt:3`, `UiIntent.kt:3`, `UiEffect.kt:3`):
 
 ```kotlin
 interface UiState
@@ -20,7 +21,7 @@ interface UiEffect
 ```
 
 - State - незмінний знімок, який рендерить UI. По одному `data class` на екран у
-  `presentation/state/` (наприклад `ChatUiState`, `presentation/state/ChatUiState.kt:16`),
+  `presentation/state/` (наприклад `ChatUiState`, `presentation/state/chat/ChatUiState.kt:14`),
   анотований `@Immutable`, щоб Compose міг пропустити рекомпозицію, коли посилання не змінилося.
 - Intent - дія користувача, яку UI надсилає донизу. Sealed-інтерфейс на екран у
   `presentation/intent/` (наприклад `ChatIntent`, `presentation/intent/ChatIntent.kt:8`).
@@ -34,7 +35,7 @@ State - це те, чим речі Є; Effect - те, що щойно СТАЛО
 
 ## Базовий клас `MviViewModel`
 
-`presentation/base/MviViewModel.kt:21`:
+`presentation/base/mvi/MviViewModel.kt:15` (тіла з одного виразу зведено в один рядок):
 
 ```kotlin
 abstract class MviViewModel<S : UiState, I : UiIntent, E : UiEffect>(
@@ -77,26 +78,31 @@ abstract class MviViewModel<S : UiState, I : UiIntent, E : UiEffect>(
 - `emitEffect` запускається на `viewModelScope`, бо `SharedFlow.emit` - це `suspend`; цей запуск
   прив'язує випромінювання до життєвого циклу ViewModel.
 
-Обрізаний "родич" є в `presentation/base/StateViewModel.kt:15` (`StateViewModel<S, E>`):
+Обрізаний "родич" є в `presentation/base/mvi/StateViewModel.kt:15` (`StateViewModel<S, E>`):
 ідентичний механізм state/effect, але без типу `Intent` і без `dispatch`. Він для екранів, що
-викликають методи ViewModel напряму, а не пропускають кожну дію через sealed-intent.
+викликають методи ViewModel напряму, а не пропускають кожну дію через sealed-intent
+(`EditChatViewModel`, `EditContactDataViewModel`, `SearchUsersViewModel`).
 
 ## Два стилі ViewModel, що реально використовуються
 
 Кодова база не нав'язує один патерн. Обидва присутні й обидва легітимні:
 
-1. MVI з маршрутизацією intent (розширює `MviViewModel`). Приклад: `ChatViewModel`
-   (`presentation/viewmodel/ChatViewModel.kt:60`) та `AuthViewModel`
-   (`presentation/viewmodel/AuthViewModel.kt:39`). UI лише викликає `dispatch(intent)`;
+1. MVI з маршрутизацією intent (розширює `MviViewModel`). Приклади: `ChatViewModel`
+   (`presentation/viewmodel/ChatViewModel.kt:58`), `AuthViewModel`
+   (`presentation/viewmodel/AuthViewModel.kt:34`), `ChangePhoneViewModel`,
+   `DeleteAccountViewModel`, `EditProfileViewModel`. UI лише викликає `dispatch(intent)`;
    `handleIntent` - це один `when` по sealed-intent
-   (`presentation/viewmodel/ChatViewModel.kt:137`).
+   (`presentation/viewmodel/ChatViewModel.kt:183`).
 2. Метод-і-StateFlow (розширює звичайний `ViewModel` / `AndroidViewModel`). Приклад:
-   `ConversationsViewModel` (`presentation/viewmodel/ConversationsViewModel.kt:38`) надає
+   `ChatsViewModel` (`presentation/viewmodel/ChatsViewModel.kt:35`) надає
    `MutableStateFlow(...).asStateFlow()` плюс публічні методи (`deleteConversation`,
    `createConversation`, `refresh`). `CallViewModel`
-   (`presentation/viewmodel/CallViewModel.kt:48`) робить те саме і додатково використовує
+   (`presentation/viewmodel/CallViewModel.kt:38`) робить те саме і додатково використовує
    `Channel<CallExit>`, відкритий як `receiveAsFlow()`, для одноразових навігаційних подій замість
-   `SharedFlow` ефектів.
+   `SharedFlow` ефектів. `ClipPlayerViewModel` (`presentation/viewmodel/ClipPlayerViewModel.kt`),
+   що стоїть за голосовим міні-плеєром на всіх вкладках, - найтонший випадок: його `state` - це
+   прямо переданий `ClipPlaybackController.state` рівня застосунку, а методи переадресовуються
+   контролеру (див. [[Voice Messages_UA|Голосові повідомлення]]).
 
 Компроміс: стиль 1 дає єдину, тестовну точку входу й вичерпний перелік дій; стиль 2 легший для
 екранів із небагатьма діями або де `Channel` природніше лягає на "навігувати один раз". Обидва
@@ -106,7 +112,7 @@ abstract class MviViewModel<S : UiState, I : UiIntent, E : UiEffect>(
 
 Стан збирається через `collectAsStateWithLifecycle`, який збирає лише поки життєвий цикл
 щонайменше STARTED, тож екран у фоні припиняє роботу з рекомпозицією. Реальне місце виклику в
-навігації (`presentation/navigation/navigation.kt:82`):
+навігації (`presentation/navigation/graph/AppNavigation.kt:27`):
 
 ```kotlin
 val authViewModel: AuthViewModel = hiltViewModel()
@@ -114,7 +120,7 @@ val authState by authViewModel.state.collectAsStateWithLifecycle()
 ```
 
 Ефекти збираються через проєктний хелпер `ObserveAsEvents`
-(`presentation/base/ObserveAsEvents.kt:12`):
+(`presentation/base/ObserveAsEvents.kt:13`):
 
 ```kotlin
 @Composable
@@ -134,13 +140,13 @@ fun <T> ObserveAsEvents(events: Flow<T>, onEvent: (T) -> Unit) {
 потоці". `repeatOnLifecycle(STARTED)` перезапускає збирання, коли екран повертається на передній
 план, і скасовує його, коли той іде, що не дає фоновому екрану навігувати чи показувати тости.
 `Dispatchers.Main.immediate` уникає зайвого перерозподілу, коли ми вже в main, тож ефект, що
-запускає навігацію, виконується синхронно в тому ж кадрі. `ChatScreen` імпортує й використовує
-цей хелпер (`presentation/screens/ChatScreen.kt:102`).
+запускає навігацію, виконується синхронно в тому ж кадрі. `ChatScreenWithNav` використовує цей
+хелпер (`presentation/screens/chat/ChatScreenWithNav.kt:75`).
 
 ## Редукування стану: патерн `setState { copy(...) }`
 
 Кожна мутація стану проходить через редьюсер. З `ChatViewModel`
-(`presentation/viewmodel/ChatViewModel.kt:314`):
+(`presentation/viewmodel/ChatViewModel.kt:435`):
 
 ```kotlin
 setState {
@@ -154,7 +160,7 @@ setState {
 Оскільки `ChatUiState` - незмінний `data class`, `copy` створює новий екземпляр; `StateFlow`
 порівнює за рівністю і випромінює лише коли щось справді змінилося, тож ідентичні оновлення не
 спричиняють рекомпозицію. Читання всередині ViewModel використовує `currentState`
-(`presentation/viewmodel/ChatViewModel.kt:161`) для останнього знімка без збирання.
+(`presentation/viewmodel/ChatViewModel.kt:221`) для останнього знімка без збирання.
 
 ## UiText: рядки помилок/повідомлень, що доживають до часу composе
 
@@ -168,7 +174,7 @@ setState {
 ## Смерть процесу і `SavedStateHandle`
 
 ViewModel зі скоупом екрана читають свої навігаційні аргументи з `SavedStateHandle`, який
-відновлюється після смерті процесу. `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:62`):
+відновлюється після смерті процесу. `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:80`):
 
 ```kotlin
 val conversationId: String = savedStateHandle.get<String>("conversationId") ?: ""
@@ -183,10 +189,12 @@ private val partnerId: String = savedStateHandle.get<String>("partnerId") ?: ""
 Екрани структуровані так, що прив'язаний до ViewModel "root" тонкий, а візуальний "screen" - чиста
 функція від стану. Root отримує ViewModel через `hiltViewModel()`, збирає стан через
 `collectAsStateWithLifecycle`, під'єднує `ObserveAsEvents` для ефектів і передає `state` плюс
-`onIntent`/колбеки в stateless-composable екрана. `ChatScreen.kt` дотримується цього: імпортує
-`hiltViewModel`, `collectAsStateWithLifecycle`, `ObserveAsEvents`, `ChatIntent`, `ChatEffect` та
-`ChatUiState` (`presentation/screens/ChatScreen.kt:95`), а візуальний екран рендерить `ChatUiState`,
-переспрямовуючи дії користувача як `ChatIntent`. Те, що stateless-екран є чистою функцією від
+`onIntent`/колбеки в stateless-composable екрана. Екран чату дотримується цього у файлах
+`presentation/screens/chat/`: `ChatScreenWithNav` отримує ViewModel (`ChatScreenWithNav.kt:62`),
+збирає стан (`:70`) і ефекти (`:75`) та передає стан плюс колбеки `ChatIntent` у
+`ChatScreenContent`, що рендерить `ChatUiState`; `ChatScreenPreview` рендерить той самий вміст із
+фейковим станом. Інші екрани мають такий самий поділ файлів `Screen` / `ScreenContent` /
+`ScreenPreview` (автентифікація, налаштування, видалення акаунта). Те, що stateless-екран є чистою функцією від
 `UiState`, і робить можливими `@Preview` та UI-тести без живого ViewModel.
 
 ## Розглянуті альтернативи
@@ -205,4 +213,5 @@ private val partnerId: String = savedStateHandle.get<String>("partnerId") ?: ""
 
 [[Async and Reactivity_UA|Асинхронність і реактивність]] - [[Navigation_UA|Навігація]] -
 [[Domain Layer_UA|Доменний шар]] - [[Chat and Messaging_UA|Чат і обмін повідомленнями]] -
-[[Authentication_UA|Автентифікація]] - [[Architecture Overview_UA|Огляд архітектури]]
+[[Authentication_UA|Автентифікація]] - [[Voice Messages_UA|Голосові повідомлення]] -
+[[Architecture Overview_UA|Огляд архітектури]]

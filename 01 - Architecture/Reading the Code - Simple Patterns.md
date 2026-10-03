@@ -13,7 +13,7 @@ that is a project rule. Here they are only to explain.)
 
 Idea: the ViewModel is the only one allowed to CHANGE the data. Everyone else may only READ it.
 
-Real code from `presentation/base/MviViewModel.kt:25`:
+Real code from `presentation/base/mvi/MviViewModel.kt:19`:
 
 ```kotlin
 // PRIVATE + MUTABLE. The underscore "_" means "internal, do not touch from outside".
@@ -98,9 +98,9 @@ Real code from `data/repository/MessageRepositoryImpl.kt:34`:
 
 ```kotlin
 fun getMessagesStream(conversationId: String): Flow<List<Message>> {
-    return messageBox.query(...)         // "give me this chat's messages"
-        .build()
-        .asFlow()                        // turn the database query into a live tap
+    return queryFlow {                   // turn a database query into a live tap
+        messageBox.query(...).build()    // "give me this chat's messages"
+    }
         .map { rows -> rows.map { it.toDomain() } } // convert storage rows -> app objects
         .flowOn(Dispatchers.Default)     // do that converting off the main thread
 }
