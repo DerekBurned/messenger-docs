@@ -42,8 +42,19 @@ ObjectBox-потік репозиторію (див. [[Async and Reactivity_UA|�
 Suspend use case, що продукує потік результатів - `SendMessageUseCase`
 (`domain/usecase/message/SendMessageUseCase.kt:17`) валідує ввід (не порожній, <= 5000 символів),
 резолвить поточного користувача через `GetCurrentUserUseCase`, будує `Message.Text` (новий `UUID`,
-`MessageStatus.SENDING`, сніпет відповіді, обрізаний до 200 символів), викликає
+`MessageStatus.SENDING`, сніпет відповіді з `Message.replySnippet()`), викликає
 `messageRepository.sendMessage` і випромінює `Resource.Success/Error` з `flow { }`.
+
+Use case, додані в 0.1.13.1:
+- `ObserveSessionStateUseCase` (`auth/`) - поєднує стан автентифікації Firebase, шлюз потоку входу
+  й віддалений профіль у `SessionState` (див. [[Navigation_UA|Навігація]]).
+- `DeleteAccountUseCase` (`auth/`) - викликає серверне видалення, потім очищує пристрій лише при
+  успіху (див. [[Settings_UA|Налаштування]]).
+- `BackfillRecentHistoryUseCase` (`sync/`) - тягне нещодавні повідомлення для останніх розмов після
+  входу (див. [[Authentication_UA|Автентифікація]]).
+- `DeleteMessageUseCase` (`message/`) тепер також приймає `IClipRepository` і прибирає завантажений
+  файл голосового кліпу після успішного видалення для всіх.
+- `MarkConversationAsUnreadUseCase` (`conversation/`) живить свайп-дію "позначити непрочитаним".
 
 Use case компонуються з інших use case (`SendMessageUseCase` залежить від
 `GetCurrentUserUseCase`), що тримає оркестрацію в домені, а не у ViewModel. Їх постачає
@@ -52,8 +63,13 @@ Use case компонуються з інших use case (`SendMessageUseCase` �
 ## Інтерфейси репозиторіїв
 
 `domain/repository/` визначає контракти, які виконує шар даних:
-`IAuthRepository`, `IConversationRepository`, `IMessageRepository`, `IMediaRepository`,
-`ISyncRepository`, `IUserRepository`. ViewModel чи use case залежить від інтерфейсу; Hilt
+`IAuthRepository`, `IClipRepository`, `IConversationRepository`, `IMessageRepository`,
+`IMediaRepository`, `ISyncRepository`, `IUserRepository`. `IClipRepository`
+(`domain/repository/IClipRepository.kt`) - контракт голосових кліпів: `sendClip(..., replyTo)`,
+`ensureLocal`, `markPlayed`, `nextVoiceClip`, `evictCachedCopy`, `observeDeletedClipIds`,
+`deleteRemoteFile`, `retry`, `cancelSend` (див. [[Voice Messages_UA|Голосові повідомлення]]).
+`IUserRepository` отримав `observeRemoteUser` (для шлюзу сесії) і `observeCachedUsers` (для живих
+рядків співрозмовників). ViewModel чи use case залежить від інтерфейсу; Hilt
 прив'язує `*Impl` (див. [[Dependency Injection (Hilt)_UA|Впровадження залежностей (Hilt)]] та
 [[Data Layer_UA|Шар даних]]). Це шов, що тримає ObjectBox і Firebase поза доменом.
 
@@ -67,7 +83,10 @@ Use case компонуються з інших use case (`SendMessageUseCase` �
   `FirebaseCallSignalingService`.
 - `IPresenceService`, `ITypingService` - присутність і набір. Прив'язані до
   `FirebasePresenceService` / `FirebaseTypingService`.
-- `ISessionCleaner` - локальне очищення під час виходу.
+- `ISessionCleaner` - локальне очищення під час виходу (`clearOnLogout`), плюс `clearOnDelete`,
+  що також прибирає ключ ідентичності E2EE після видалення акаунта.
+- `IAuthFlowGate` - `isBusy: Flow<Boolean>` і `withAuthFlow { }`, що позначають вхід як такий, що
+  триває, тож шлюз сесії чекає. Прив'язаний до `InMemoryAuthFlowGate`.
 
 `CallEventListener` і `CallConnectionState` теж живуть під `domain/service/`, тож поверхня колбеків
 Agora виражена в доменних термінах, а `AgoraCallService`
@@ -75,10 +94,18 @@ Agora виражена в доменних термінах, а `AgoraCallServic
 
 ## Доменні моделі
 
-`domain/model/` містить типи, що перетинають шари. Центральний - `Message`, sealed-ієрархія з
-варіантами `Message.Text`, `Message.Media` та `Message.Call` (згадується скрізь, наприклад
-`when (message)` у `MessageRepositoryImpl.previewLabel`,
-`data/repository/MessageRepositoryImpl.kt:199`). Інші: `Conversation`, `User`, `DomainUser`,
+`domain/model/` містить типи, що перетинають шари. Центральний - `Message`
+(`domain/model/Message.kt:6`), sealed-ієрархія з варіантами `Message.Text`, `Message.Media`,
+`Message.Clip` (`:57`) та `Message.Call` (згадується скрізь, наприклад `when (message)` у
+`MessageRepositoryImpl.previewLabel`, `data/repository/MessageRepositoryImpl.kt:209`).
+`Message.replySnippet()` (`:72`) - єдине правило для цитат відповіді. Навантаження кліпу - `Clip`
+(`domain/model/voiceMessage/Clip.kt:6`), sealed-клас із `Voice` (хвиля, ліміт 1 година
+`MAX_DURATION_MS`, мітка "Voice message", `m4a`) і `Video` (лише бульбашка-заглушка); кожен підтип
+несе власні `previewLabel`, `fileExtension` і `maxDurationMs`, тож прев'ю, пуші й UI мають одне
+джерело міток. Типи сесії: `SessionState` (`Resolving` / `SignedOut(reason)` / `Active(user)`) з
+`SessionEndReason` (`PROFILE_MISSING`, `ACCOUNT_DELETED`) і `RemoteUserSnapshot(user,
+authoritative)`. `User` отримав `deleted` / `deletedAt` для акаунтів із надгробком. Інші:
+`Conversation`, `User`, `DomainUser`,
 `Profile`, `MediaItem`, `MediaTransfer`, `MessageStatus` (SENDING/SENT/READ/FAILED),
 `CallHistoryEntry`, `CallSignal`, `CallStatus`, `PresenceState` (ONLINE/AWAY/OFFLINE),
 `UserPresence`, `PhoneNumber`, `PhoneVisibility`, `SyncStatus`, а також константи синхронізації під
@@ -87,8 +114,9 @@ Agora виражена в доменних термінах, а `AgoraCallServic
 Оскільки це звичайні типи Kotlin, вони одночасно є станом, який рендерить UI (`ChatUiState` тримає
 `List<Message>` напряму), і значеннями, які продукують маппери Firestore/ObjectBox. Дискримінатори
 типу повідомлення, що використовуються на шляхах дзвінків/історії, живуть як константи на `Message`
-(`TYPE_TEXT`, `TYPE_MISSED_CALL`, `TYPE_UNREACHED_CALL`, `TYPE_ENDED_CALL`; див.
-`data/repository/CallHistoryRepository.kt:67`).
+(`TYPE_TEXT`, `TYPE_MEDIA`, `TYPE_MISSED_CALL`, `TYPE_UNREACHED_CALL`, `TYPE_ENDED_CALL`,
+`TYPE_VOICE_CLIP`, `TYPE_VIDEO_CLIP`; `Message.kt:81`-`:87`; типи дзвінків використовуються в
+`data/repository/CallHistoryRepository.kt:79`).
 
 ## Навіщо взагалі доменний шар
 
@@ -105,4 +133,4 @@ Agora виражена в доменних термінах, а `AgoraCallServic
 
 [[Data Layer_UA|Шар даних]] - [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]] -
 [[Dependency Injection (Hilt)_UA|Впровадження залежностей (Hilt)]] -
-[[Architecture Overview_UA|Огляд архітектури]]
+[[Architecture Overview_UA|Огляд архітектури]] - [[Voice Messages_UA|Голосові повідомлення]]
