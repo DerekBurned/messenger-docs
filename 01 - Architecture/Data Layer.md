@@ -36,7 +36,9 @@ columns carry `@Index` - `ObxMessage.conversationId` and `ObxMessage.type`
 (`type.oneOf(...)`) is not a full-table scan. Complex fields are stored via `@Convert`
 property converters (for example `MediaItemListConverter` for `mediaItemsJson`,
 `PhoneNumberConverter`, `StringListConverter`), so a `List<MediaItem>` persists as JSON in one
-column.
+column. Voice clips use the same trick: `ObxMessage.clipJson` holds a `ClipPayload` through
+`ClipConverter` (`ObxMessage.kt:36`), and `clipPlayed` (`:38`) drives the unplayed dot. Deleted
+accounts are kept as rows with `ObxUser.deleted` / `deletedAt` (`ObxUser.kt:23`).
 
 The eight boxes are provided as singletons in `di/ObjectBoxModule.kt`: `provideBoxStore`
 (`di/ObjectBoxModule.kt:30`) builds `MyObjectBox` and, in debug only, recovers from a
@@ -67,6 +69,9 @@ models.
 - `MediaRepositoryImpl` (`IMediaRepository`) - owns its own app-scoped coroutine scope for
   uploads/downloads; see [[Chat and Messaging]] and the scope rationale in
   [[Async and Reactivity]].
+- `ClipRepositoryImpl` (`IClipRepository`, `data/repository/ClipRepositoryImpl.kt:48`) - voice
+  clips: send through the outbox, confirmed Firestore write, deduplicated download
+  (`InFlight`), recovery after process death, cleanup of deleted clips. See [[Voice Messages]].
 - `ConversationRepositoryImpl` (`IConversationRepository`) - conversation list stream,
   create/find, delete-for-me vs delete-for-everyone via `visibleTo`/`clearedAt`.
 - `UserRepositoryImpl` (`IUserRepository`) - user lookup/search, contact aliases, avatar
@@ -144,7 +149,18 @@ When a write cannot reach Firestore, the repository enqueues an `ObxSyncQueueIte
 - `MediaTransferManager` - performs uploads/downloads via `FirebaseStorageService`, exposing a
   `StateFlow<Map<String, MediaTransfer>>` of progress that `MediaRepositoryImpl.transfers`
   re-exposes upward.
-- `MediaCache` - on-disk cache of originals/downloads keyed by item id and kind.
+- `MediaCache` - on-disk cache of originals/downloads keyed by item id and kind
+  (`cacheDir/chat_media`, `MediaCache.DIR`). For voice clips it also owns two `filesDir`
+  folders that must survive cache eviction: `clip_outbox` (`OUTBOX_DIR`, unsent clips until the
+  send is confirmed, then promoted into the cache) and `voice_drafts` (`DRAFTS_DIR`).
+  `deleteStaleTemporaries` (`data/media/MediaCache.kt:62`) removes leftover `recording_`, `.dl`,
+  `.part` and `.enc` files on startup.
+- `MediaFileTransfer` - the per-file upload/download with encryption; downloads go through a
+  unique temp file and an atomic move, so a crash never leaves a half-written file under the
+  final name.
+- `VoiceRecorder`, `VoiceDraftStore`, `ClipPlaybackController` - the voice recording, draft
+  persistence (`<conversationId>.m4a` + JSON sidecar) and ExoPlayer playback singletons. See
+  [[Voice Messages]].
 - `MediaMetadata` - extracts width/height/duration and a BlurHash for a picked file.
 - `BlurHash` / `BlurHashCache` - compact blur placeholders shown before an image loads.
 - `MediaStoreGallery` - reads the device gallery for the picker.
@@ -157,4 +173,4 @@ conversation is encryptable; the key travels inside the encrypted message payloa
 
 [[Domain Layer]] - [[Async and Reactivity]] - [[Dependency Injection (Hilt)]] -
 [[Chat and Messaging]] - [[Notifications]] - [[Presence and Typing]] -
-[[End-to-End Encryption]] - [[Architecture Overview]]
+[[End-to-End Encryption]] - [[Voice Messages]] - [[Architecture Overview]]

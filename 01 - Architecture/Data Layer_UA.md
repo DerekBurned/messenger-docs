@@ -37,7 +37,10 @@ upsert того самого віддаленого id замінює рядок
 (`ObxMessage.kt:16`, `:24`); індекс `type` існує, щоб запит історії дзвінків (`type.oneOf(...)`)
 не був повним скануванням таблиці. Складні поля зберігаються через `@Convert` property-конвертери
 (наприклад `MediaItemListConverter` для `mediaItemsJson`, `PhoneNumberConverter`,
-`StringListConverter`), тож `List<MediaItem>` зберігається як JSON в одному стовпці.
+`StringListConverter`), тож `List<MediaItem>` зберігається як JSON в одному стовпці. Голосові кліпи
+використовують той самий прийом: `ObxMessage.clipJson` тримає `ClipPayload` через `ClipConverter`
+(`ObxMessage.kt:36`), а `clipPlayed` (`:38`) керує крапкою непрослуханого. Видалені акаунти
+лишаються рядками з `ObxUser.deleted` / `deletedAt` (`ObxUser.kt:23`).
 
 Вісім боксів постачаються як singleton у `di/ObjectBoxModule.kt`: `provideBoxStore`
 (`di/ObjectBoxModule.kt:30`) будує `MyObjectBox` і лише в debug відновлюється після
@@ -68,6 +71,10 @@ upsert того самого віддаленого id замінює рядок
 - `MediaRepositoryImpl` (`IMediaRepository`) - володіє власним scope рівня застосунку для
   завантажень/вивантажень; див. [[Chat and Messaging_UA|Чат і обмін повідомленнями]] та
   обґрунтування scope в [[Async and Reactivity_UA|Асинхронність і реактивність]].
+- `ClipRepositoryImpl` (`IClipRepository`, `data/repository/ClipRepositoryImpl.kt:48`) - голосові
+  кліпи: надсилання через outbox, підтверджений запис у Firestore, дедупльоване завантаження
+  (`InFlight`), відновлення після смерті процесу, прибирання видалених кліпів. Див.
+  [[Voice Messages_UA|Голосові повідомлення]].
 - `ConversationRepositoryImpl` (`IConversationRepository`) - потік списку розмов, create/find,
   видалення для себе проти для всіх через `visibleTo`/`clearedAt`.
 - `UserRepositoryImpl` (`IUserRepository`) - пошук/lookup користувачів, псевдоніми контактів,
@@ -147,7 +154,18 @@ BOM `34.10.0` (`gradle/libs.versions.toml:13`) керує версіями Fireb
 - `MediaTransferManager` - виконує завантаження/вивантаження через `FirebaseStorageService`,
   відкриваючи `StateFlow<Map<String, MediaTransfer>>` прогресу, який `MediaRepositoryImpl.transfers`
   повторно відкриває нагору.
-- `MediaCache` - дисковий кеш оригіналів/завантажень за ключем id елемента й типу.
+- `MediaCache` - дисковий кеш оригіналів/завантажень за ключем id елемента й типу
+  (`cacheDir/chat_media`, `MediaCache.DIR`). Для голосових кліпів він також володіє двома теками в
+  `filesDir`, що мають пережити очищення кешу: `clip_outbox` (`OUTBOX_DIR`, ненадіслані кліпи до
+  підтвердження надсилання, потім переносяться в кеш) і `voice_drafts` (`DRAFTS_DIR`).
+  `deleteStaleTemporaries` (`data/media/MediaCache.kt:62`) прибирає залишки `recording_`, `.dl`,
+  `.part` і `.enc` під час запуску.
+- `MediaFileTransfer` - завантаження/вивантаження одного файлу з шифруванням; завантаження йдуть
+  через унікальний тимчасовий файл і атомарне переміщення, тож збій ніколи не лишає напівзаписаний
+  файл під кінцевим ім'ям.
+- `VoiceRecorder`, `VoiceDraftStore`, `ClipPlaybackController` - singleton-и запису голосу,
+  збереження чернеток (`<conversationId>.m4a` + JSON-супровідник) і відтворення через ExoPlayer.
+  Див. [[Voice Messages_UA|Голосові повідомлення]].
 - `MediaMetadata` - витягує ширину/висоту/тривалість і BlurHash для обраного файлу.
 - `BlurHash` / `BlurHashCache` - компактні розмиті плейсхолдери, показані до завантаження
   зображення.
@@ -163,4 +181,5 @@ BOM `34.10.0` (`gradle/libs.versions.toml:13`) керує версіями Fireb
 [[Dependency Injection (Hilt)_UA|Впровадження залежностей (Hilt)]] -
 [[Chat and Messaging_UA|Чат і обмін повідомленнями]] - [[Notifications_UA|Сповіщення]] -
 [[Presence and Typing_UA|Присутність і набір тексту]] -
-[[End-to-End Encryption_UA|Наскрізне шифрування]] - [[Architecture Overview_UA|Огляд архітектури]]
+[[End-to-End Encryption_UA|Наскрізне шифрування]] - [[Voice Messages_UA|Голосові повідомлення]] -
+[[Architecture Overview_UA|Огляд архітектури]]
