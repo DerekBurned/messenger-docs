@@ -6,7 +6,7 @@ copied from the repo with `Log` lines trimmed; the "why" lives in the main note.
 Files covered:
 - `domain/model/voiceMessage/Clip.kt`
 - `data/media/VoiceRecorder.kt`, `data/media/VoiceDraftStore.kt`
-- `presentation/components/chat/RecordMicButton.kt`
+- `presentation/components/chat/RecordMicButton.kt`, `LiveRecordingWaveform.kt`, `VoiceWaveform.kt`
 - `data/repository/ClipRepositoryImpl.kt`
 - `data/media/ClipPlaybackController.kt`
 - `presentation/screens/chat/VoiceBubble.kt`
@@ -105,10 +105,35 @@ init {
 }
 ```
 
-Finishing versus interrupting (`VoiceRecorder.kt:191`):
+Waveform levels (`VoiceRecorder.kt:78`), on a decibel scale and normalised to the peak:
 
 ```kotlin
-fun stop(conversationId: String): VoiceRecording? {
+private const val FULL_SCALE_AMPLITUDE = 32_767.0
+private const val SILENCE_FLOOR_DB = -50.0
+
+internal fun amplitudeToLevel(amplitude: Int): Int {
+    if (amplitude <= 0) return 0
+    val db = 20.0 * log10(amplitude / FULL_SCALE_AMPLITUDE)
+    return ((db - SILENCE_FLOOR_DB) / -SILENCE_FLOOR_DB * 100.0).roundToInt().coerceIn(0, 100)
+}
+
+fun normalizeWaveform(levels: List<Int>): List<Int> {
+    val peak = levels.maxOrNull() ?: return levels
+    if (peak <= 0 || peak >= 100) return levels.map { it.coerceIn(0, 100) }
+    return levels.map { (it.coerceAtLeast(0) * 100f / peak).roundToInt() }
+}
+```
+
+A quiet phone microphone peaking at amplitude 1000 was level 3 under the old linear mapping and
+is level 39 here; `normalizeWaveform` then stretches the whole note so its loudest bucket is 100.
+`VoiceWaveform` runs `normalizeWaveform` on stored waveforms too
+(`presentation/components/chat/VoiceWaveform.kt:28`), which is what repairs notes already sent
+with the old scale. Covered by `WaveformTest`.
+
+Finishing versus interrupting (`VoiceRecorder.kt:201`):
+
+```kotlin
+fun stop(conversationId: String): ClipRecording? {
     if (owner != conversationId) return null
     return finish()
 }
@@ -119,19 +144,19 @@ fun interrupt(conversationId: String? = null) {
     finish()?.let(drafts::save)
 }
 
-private fun finish(): VoiceRecording? {
+private fun finish(): ClipRecording? {
     val active = recorder
     val file = outputFile
     val conversationId = owner
     val durationMs = recordedDurationMs(startedAt, SystemClock.elapsedRealtime())
-    val waveform = downsampleWaveform(samples.toList())
+    val waveform = normalizeWaveform(downsampleWaveform(samples.toList()))
     release(active)
     if (active == null || file == null || conversationId == null) return null
     if (!file.exists() || file.length() == 0L || durationMs < MIN_DURATION_MS) {
         file.delete()
         return null
     }
-    return VoiceRecording(
+    return ClipRecording(
         conversationId = conversationId,
         file = file,
         durationMs = durationMs,
@@ -141,7 +166,20 @@ private fun finish(): VoiceRecording? {
 ```
 
 `stop` and `interrupt` share `finish`; the only difference is where the result goes - to
-`sendVoice`, or to the draft store. `owner` makes a recording belong to one chat.
+`sendRecording`, or to the draft store. `owner` makes a recording belong to one chat.
+`ClipRecording` defaults `kind` to `ClipKind.VOICE`; the video recorder produces the same type
+with `kind = VIDEO` (see [[Video Messages - Code]]).
+
+The live bar (`presentation/components/chat/LiveRecordingWaveform.kt:25`):
+
+```kotlin
+internal fun liveWaveformOffset(barCount: Int, pitchPx: Float, widthPx: Float): Float =
+    (barCount * pitchPx - widthPx).coerceAtLeast(0f)
+```
+
+Bars are drawn at a fixed pitch at `index * pitch - scroll`, and `scroll` is an `Animatable`
+animated to this offset over one sample interval, so bars grow from the left and then glide left
+instead of being re-spread across the width.
 
 ---
 
@@ -150,20 +188,30 @@ private fun finish(): VoiceRecording? {
 `data/media/VoiceDraftStore.kt`:
 
 ```kotlin
-fun save(recording: VoiceRecording) {
-    val audio = audioFileFor(recording.conversationId)
-    if (!mediaCache.move(recording.file, audio)) {
+@Serializable
+internal data class VoiceDraftMeta(
+    val durationMs: Long,
+    val waveform: List<Int> = emptyList(),
+    val kind: ClipKind = ClipKind.VOICE,
+)
+
+fun save(recording: ClipRecording) {
+    val media = mediaFileFor(recording.conversationId, recording.kind)
+    ClipKind.entries
+        .filter { it != recording.kind }
+        .forEach { mediaFileFor(recording.conversationId, it).delete() }
+    if (!mediaCache.move(recording.file, media)) {
         recording.file.delete()
         return
     }
     runCatching {
         metaFileFor(recording.conversationId)
-            .writeText(VoiceDraftMeta(recording.durationMs, recording.waveform).encode())
+            .writeText(VoiceDraftMeta(recording.durationMs, recording.waveform, recording.kind).encode())
     }
-    drafts.update { it + (recording.conversationId to recording.copy(file = audio)) }
+    drafts.update { it + (recording.conversationId to recording.copy(file = media)) }
 }
 
-fun take(conversationId: String): VoiceRecording? {
+fun take(conversationId: String): ClipRecording? {
     val draft = drafts.value[conversationId] ?: return null
     drafts.update { it - conversationId }
     metaFileFor(conversationId).delete()
@@ -171,8 +219,10 @@ fun take(conversationId: String): VoiceRecording? {
 }
 ```
 
-`load(conversationId)` rebuilds the in-memory map from `voice_drafts/<id>.m4a` and
-`<id>.json` after process death and deletes either file if the other is missing or corrupt.
+`load(conversationId)` reads `<id>.json` first, then the media file for that kind
+(`voice_drafts/<id>.m4a` or `<id>.mp4`), and deletes both if either is missing or corrupt. A
+sidecar written before video support has no `kind` and decodes as `VOICE`
+(`VoiceDraftMetaTest`).
 
 ---
 
@@ -194,11 +244,28 @@ Inside `awaitEachGesture`, `released = !change.isConsumed` is read before `chang
 Compose delivers a system cancellation as an already-consumed "up", so an unconsumed up is a
 real finger release and anything else ends in `DRAFT`.
 
+Before any of that, the first 200 ms decide tap versus hold (a tap toggles voice/video and
+returns before `start()`; see section 6 of [[Video Messages - Code]]). Drags are measured in root
+coordinates so a composer that moves under the finger cannot eat the slide:
+
+```kotlin
+val origin = remember { arrayOf(Offset.Zero) }
+...
+.onGloballyPositioned { coordinates -> origin[0] = coordinates.positionInRoot() }
+...
+val downInRoot = down.position + origin[0]
+...
+val delta = change.position + origin[0] - downInRoot
+```
+
+`dragProgress(distancePx, thresholdPx)` (`RecordMicButton.kt:25`) turns the same delta into the
+0..1 progress that drives the lock rail's padlock and the fading "Slide to cancel" label.
+
 ---
 
 ## 5. Sending
 
-`ClipRepositoryImpl.uploadAndSend` (`data/repository/ClipRepositoryImpl.kt:236`):
+`ClipRepositoryImpl.uploadAndSend` (`data/repository/ClipRepositoryImpl.kt:244`):
 
 ```kotlin
 val encryptActive = codec.isEncryptable(message.conversationId)
@@ -352,7 +419,7 @@ internal fun focusReaction(change: Int, resumeOnGain: Boolean): FocusReaction = 
 }
 ```
 
-Auto-advance (`ClipPlaybackController.kt:272`):
+Auto-advance (`ClipPlaybackController.kt:319`):
 
 ```kotlin
 private fun onCompleted() {
@@ -361,6 +428,10 @@ private fun onCompleted() {
     advanceJob?.cancel()
     advanceJob = scope.launch {
         clipRepository.markPlayed(finished)
+        if (!shouldAutoAdvance(_state.value)) {
+            if (_state.value.messageId == finished) stop()
+            return@launch
+        }
         val next = clipRepository.nextVoiceClip(finished)
         if (_state.value.messageId != finished) return@launch
         if (next == null) {
@@ -373,13 +444,14 @@ private fun onCompleted() {
 ```
 
 The `messageId != finished` check drops the advance if the user started another clip while
-`nextVoiceClip` was querying.
+`nextVoiceClip` was querying. `shouldAutoAdvance` (`:88`) is `!finished.isVideo`: a round video
+note stops at its end instead of rolling into the next voice note.
 
 ---
 
 ## 8. The bubble's button
 
-`presentation/screens/chat/VoiceBubble.kt:58`:
+`presentation/screens/chat/VoiceBubble.kt:58` (also reused by the round video bubble):
 
 ```kotlin
 internal enum class VoiceButton { CANCEL_SEND, DOWNLOADING, RETRY_SEND, LOADING, RETRY_PLAY, PAUSE, PLAY }
@@ -427,4 +499,4 @@ The local purge on every device is driven by `observeDeletedClipIds()` in the re
 ## Related
 
 [[Voice Messages]] - [[Voice Messages - Explained Simply]] - [[Voice Messages - Basic Example]] -
-[[Chat and Messaging - Code]] - [[Async and Reactivity]]
+[[Video Messages - Code]] - [[Chat and Messaging - Code]] - [[Async and Reactivity]]

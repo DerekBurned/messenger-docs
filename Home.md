@@ -40,6 +40,7 @@ Every feature has an "Explained Simply" companion:
 - [[End-to-End Encryption - Explained Simply]]
 - [[Appearance and Theming - Explained Simply]]
 - [[Voice Messages - Explained Simply]]
+- [[Video Messages - Explained Simply]]
 
 ## Architecture
 
@@ -76,9 +77,13 @@ Historical design records (kept for context, not current behaviour):
   the "Recently searched" / "Recently opened" result suggestions backed by a recents store.
 - [[Chat and Messaging]] - send/receive, replies, media attachments, read receipts, paging,
   message deletion rules, deleted peers.
-- [[Voice Messages]] - hold-to-record with lock and slide-to-cancel, drafts on interruption,
-  the crash-safe outbox, encrypted upload, ExoPlayer playback with auto-advance, and the mini
-  player.
+- [[Voice Messages]] - hold-to-record with a slide-up lock rail and slide-to-cancel, tap to
+  switch voice/video, a left-to-right live waveform on a decibel scale with peak normalisation,
+  drafts on interruption, the crash-safe outbox, encrypted upload, ExoPlayer playback with
+  auto-advance, and the mini player.
+- [[Video Messages]] - round video notes: CameraX front-camera recording with a circular preview,
+  send/draft/discard decided on `Finalize`, video drafts, and a round bubble with inline playback
+  and drag-to-seek along its edge.
 - [[Calls (Voice and Video)]] - Agora RTC, the foreground-service call state machine, the
   active-call bar with swipe/bubble/snap-back gestures, PiP video, screen-on and proximity
   blanking, and call history.
@@ -109,6 +114,7 @@ Each feature also has a `- Code` companion that embeds and explains that feature
 - [[End-to-End Encryption - Code]]
 - [[Appearance and Theming - Code]]
 - [[Voice Messages - Code]]
+- [[Video Messages - Code]]
 
 ## Basic examples
 
@@ -128,6 +134,7 @@ thing.
 - [[End-to-End Encryption - Basic Example]]
 - [[Appearance and Theming - Basic Example]]
 - [[Voice Messages - Basic Example]]
+- [[Video Messages - Basic Example]]
 
 Every feature note also carries a `## Visualization` section with a Mermaid diagram of its core
 data flow.

@@ -135,7 +135,7 @@ entry<ChatRoute> { key ->
 ```
 
 Далі за течією `ChatViewModel` читає саме ці ключі зі свого `SavedStateHandle`
-(`presentation/viewmodel/ChatViewModel.kt:80`). `CallViewModel` та `ChatUserProfileViewModel`
+(`presentation/viewmodel/ChatViewModel.kt:87`). `CallViewModel` та `ChatUserProfileViewModel`
 отримують свої аргументи так само. Оскільки значення - це серіалізовані поля маршруту, що течуть
 через `SavedStateHandle`, вони переживають смерть процесу. Див.
 [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]] щодо аспекту смерті процесу.

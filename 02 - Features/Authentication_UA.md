@@ -114,12 +114,13 @@ phone-автентифікації, і логувалися безумовно, 
 (`domain/usecase/auth/LogoutUseCase.kt`) позначає користувача офлайн, виконує
 `sessionCleaner.clearOnLogout(uid)`, виходить із Firebase і скидає ObjectBox один раз
 (дубльований `resetDB()` усередині `FirebaseAuthService.logout()` прибрано).
-`AndroidSessionCleaner.clearOnLogout` (`data/service/AndroidSessionCleaner.kt:31`):
+`AndroidSessionCleaner.clearOnLogout` (`data/service/AndroidSessionCleaner.kt:33`):
 
-- зупиняє відтворення голосу й скасовує запис у головному потоці, потім очищає голосові чернетки,
+- зупиняє відтворення кліпів і скасовує будь-який голосовий чи відеозапис у головному потоці,
+  потім очищає чернетки кліпів,
 - видаляє FCM-токен у Firestore і на пристрої, скасовує всі сповіщення,
-- стирає кеш розшифрованих медіа, outbox і чернетки голосових кліпів та дисковий кеш Coil
-  (`:47`-`:50`).
+- стирає кеш розшифрованих медіа, outbox і чернетки кліпів та дисковий кеш Coil
+  (`:50`-`:53`).
 
 Робота, що переживає екран, теж зупиняється: `ChatsViewModel` запускає слухача розмов усередині
 `flatMapLatest` над станом автентифікації (`presentation/viewmodel/ChatsViewModel.kt:84`), тож вихід

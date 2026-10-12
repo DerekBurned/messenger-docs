@@ -21,7 +21,7 @@ interface UiEffect
 ```
 
 - State - незмінний знімок, який рендерить UI. По одному `data class` на екран у
-  `presentation/state/` (наприклад `ChatUiState`, `presentation/state/chat/ChatUiState.kt:14`),
+  `presentation/state/` (наприклад `ChatUiState`, `presentation/state/chat/ChatUiState.kt:16`),
   анотований `@Immutable`, щоб Compose міг пропустити рекомпозицію, коли посилання не змінилося.
 - Intent - дія користувача, яку UI надсилає донизу. Sealed-інтерфейс на екран у
   `presentation/intent/` (наприклад `ChatIntent`, `presentation/intent/ChatIntent.kt:8`).
@@ -88,11 +88,11 @@ abstract class MviViewModel<S : UiState, I : UiIntent, E : UiEffect>(
 Кодова база не нав'язує один патерн. Обидва присутні й обидва легітимні:
 
 1. MVI з маршрутизацією intent (розширює `MviViewModel`). Приклади: `ChatViewModel`
-   (`presentation/viewmodel/ChatViewModel.kt:58`), `AuthViewModel`
+   (`presentation/viewmodel/ChatViewModel.kt:64`), `AuthViewModel`
    (`presentation/viewmodel/AuthViewModel.kt:34`), `ChangePhoneViewModel`,
    `DeleteAccountViewModel`, `EditProfileViewModel`. UI лише викликає `dispatch(intent)`;
    `handleIntent` - це один `when` по sealed-intent
-   (`presentation/viewmodel/ChatViewModel.kt:183`).
+   (`presentation/viewmodel/ChatViewModel.kt:190`).
 2. Метод-і-StateFlow (розширює звичайний `ViewModel` / `AndroidViewModel`). Приклад:
    `ChatsViewModel` (`presentation/viewmodel/ChatsViewModel.kt:35`) надає
    `MutableStateFlow(...).asStateFlow()` плюс публічні методи (`deleteConversation`,
@@ -141,12 +141,12 @@ fun <T> ObserveAsEvents(events: Flow<T>, onEvent: (T) -> Unit) {
 план, і скасовує його, коли той іде, що не дає фоновому екрану навігувати чи показувати тости.
 `Dispatchers.Main.immediate` уникає зайвого перерозподілу, коли ми вже в main, тож ефект, що
 запускає навігацію, виконується синхронно в тому ж кадрі. `ChatScreenWithNav` використовує цей
-хелпер (`presentation/screens/chat/ChatScreenWithNav.kt:75`).
+хелпер (`presentation/screens/chat/ChatScreenWithNav.kt:83`).
 
 ## Редукування стану: патерн `setState { copy(...) }`
 
 Кожна мутація стану проходить через редьюсер. З `ChatViewModel`
-(`presentation/viewmodel/ChatViewModel.kt:435`):
+(`presentation/viewmodel/ChatViewModel.kt:490`):
 
 ```kotlin
 setState {
@@ -160,7 +160,7 @@ setState {
 Оскільки `ChatUiState` - незмінний `data class`, `copy` створює новий екземпляр; `StateFlow`
 порівнює за рівністю і випромінює лише коли щось справді змінилося, тож ідентичні оновлення не
 спричиняють рекомпозицію. Читання всередині ViewModel використовує `currentState`
-(`presentation/viewmodel/ChatViewModel.kt:221`) для останнього знімка без збирання.
+(`presentation/viewmodel/ChatViewModel.kt:229`) для останнього знімка без збирання.
 
 ## UiText: рядки помилок/повідомлень, що доживають до часу composе
 
@@ -174,7 +174,7 @@ setState {
 ## Смерть процесу і `SavedStateHandle`
 
 ViewModel зі скоупом екрана читають свої навігаційні аргументи з `SavedStateHandle`, який
-відновлюється після смерті процесу. `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:80`):
+відновлюється після смерті процесу. `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:87`):
 
 ```kotlin
 val conversationId: String = savedStateHandle.get<String>("conversationId") ?: ""
@@ -190,8 +190,8 @@ private val partnerId: String = savedStateHandle.get<String>("partnerId") ?: ""
 функція від стану. Root отримує ViewModel через `hiltViewModel()`, збирає стан через
 `collectAsStateWithLifecycle`, під'єднує `ObserveAsEvents` для ефектів і передає `state` плюс
 `onIntent`/колбеки в stateless-composable екрана. Екран чату дотримується цього у файлах
-`presentation/screens/chat/`: `ChatScreenWithNav` отримує ViewModel (`ChatScreenWithNav.kt:62`),
-збирає стан (`:70`) і ефекти (`:75`) та передає стан плюс колбеки `ChatIntent` у
+`presentation/screens/chat/`: `ChatScreenWithNav` отримує ViewModel (`ChatScreenWithNav.kt:70`),
+збирає стан (`:78`) і ефекти (`:83`) та передає стан плюс колбеки `ChatIntent` у
 `ChatScreenContent`, що рендерить `ChatUiState`; `ChatScreenPreview` рендерить той самий вміст із
 фейковим станом. Інші екрани мають такий самий поділ файлів `Screen` / `ScreenContent` /
 `ScreenPreview` (автентифікація, налаштування, видалення акаунта). Те, що stateless-екран є чистою функцією від

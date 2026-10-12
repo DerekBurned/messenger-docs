@@ -97,7 +97,7 @@ callback surface is expressed in domain terms and `AgoraCallService`
 `data/repository/MessageRepositoryImpl.kt:209`). `Message.replySnippet()` (`:72`) is the one rule
 for reply quotes. A clip's payload is `Clip` (`domain/model/voiceMessage/Clip.kt:6`), a sealed
 class with `Voice` (waveform, 1-hour cap `MAX_DURATION_MS`, label "Voice message", `m4a`) and
-`Video` (placeholder bubble only); each subtype carries its own `previewLabel`, `fileExtension`
+`Video` (round video notes, 2-minute cap, `mp4`, see [[Video Messages]]); each subtype carries its own `previewLabel`, `fileExtension`
 and `maxDurationMs`, so previews, pushes and UI share one label source. Session types:
 `SessionState` (`Resolving` / `SignedOut(reason)` / `Active(user)`) with `SessionEndReason`
 (`PROFILE_MISSING`, `ACCOUNT_DELETED`), and `RemoteUserSnapshot(user, authoritative)`. `User`

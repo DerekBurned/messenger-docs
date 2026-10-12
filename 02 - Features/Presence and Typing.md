@@ -60,7 +60,7 @@ its own.
 `ValueEventListener` flow into a `UserPresence(state, lastSeen)`. `observeMultiplePresence`
 (`:30`) `combine`s a list of per-user flows into a single `Map<String, UserPresence>` - used by
 the conversations list to light up every row (see [[Conversations List]]). In chat,
-`ChatViewModel.observePartnerPresence` (`presentation/viewmodel/ChatViewModel.kt:400`) `combine`s
+`ChatViewModel.observePartnerPresence` (`presentation/viewmodel/ChatViewModel.kt:455`) `combine`s
 the presence flow with a 60s ticker so the "last seen N minutes ago" label keeps refreshing even
 when presence itself has not changed. The underlying `callbackFlow` + `awaitClose` cleanup is in
 [[Async and Reactivity]].
@@ -71,7 +71,7 @@ Typing is written under `typing/{conversationId}/{uid}` in RTDB. Like presence, 
 self-heals: it is cleared whether the user leaves the chat, backgrounds the app, or the process
 is killed, so a partner never gets a permanently stuck "typing...".
 
-- Outgoing: `ChatViewModel.onTextChanged` (`presentation/viewmodel/ChatViewModel.kt:445`)
+- Outgoing: `ChatViewModel.onTextChanged` (`presentation/viewmodel/ChatViewModel.kt:500`)
   debounces 500ms before `typingService.setTyping`, with a 5s TTL clear and an immediate clear
   on empty input. `FirebaseTypingService.setTyping` (`FirebaseTypingService.kt:28`) writes a
   timestamp node for the current user.
@@ -80,7 +80,7 @@ is killed, so a partner never gets a permanently stuck "typing...".
   for presence. A crash, lost network, or process kill makes the Firebase server remove the
   typing node. `clearTyping` (`:85`) cancels that handler before removing the node on a clean
   clear.
-- Leave-the-screen clear: `ChatViewModel.onCleared` (`ChatViewModel.kt:561`) calls the
+- Leave-the-screen clear: `ChatViewModel.onCleared` (`ChatViewModel.kt:616`) calls the
   non-suspending `typingService.clearTypingNow` (`FirebaseTypingService.kt:38` ->
   `RealtimeDbService.kt:91`). `viewModelScope` is already cancelled there, so the clear cannot be
   a suspend call launched in it; `clearTypingNow` fires `removeValue()` without awaiting and
@@ -96,7 +96,7 @@ is killed, so a partner never gets a permanently stuck "typing...".
       .map { it.key }
       .toSet()
   ```
-  `ChatViewModel.observeTyping` (`ChatViewModel.kt:430`) collects it into `isPartnerTyping` /
+  `ChatViewModel.observeTyping` (`ChatViewModel.kt:485`) collects it into `isPartnerTyping` /
   `typingUsernames`, shown as the "typing..." label in the chat header.
 
 ## Why Realtime Database (not Firestore) for these

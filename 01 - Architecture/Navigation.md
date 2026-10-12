@@ -129,7 +129,7 @@ entry<ChatRoute> { key ->
 ```
 
 Downstream, `ChatViewModel` reads those exact keys from its `SavedStateHandle`
-(`presentation/viewmodel/ChatViewModel.kt:80`). `CallViewModel` and `ChatUserProfileViewModel`
+(`presentation/viewmodel/ChatViewModel.kt:87`). `CallViewModel` and `ChatUserProfileViewModel`
 receive their args the same way. Because the values are serialized route fields flowing through
 `SavedStateHandle`, they survive process death. See [[Presentation Layer (MVI)]] for the
 process-death angle.

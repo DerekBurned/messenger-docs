@@ -23,12 +23,15 @@ stays in your drawer.
 
 Alice records "see you at eight" for Bob.
 
-1. She presses and holds the mic. The app starts a recorder
-   (`VoiceRecorder.start`, `data/media/VoiceRecorder.kt:130`) and the screen stays awake. A live
-   waveform bar shows how loud she is.
+1. She presses and holds the mic. If she let go within 200 ms it would only be a tap, which
+   switches the button between voice and video. Holding longer starts the recorder
+   (`VoiceRecorder.start`, `data/media/VoiceRecorder.kt:152`) and the screen stays awake. A live
+   waveform shows how loud she is: bars appear from the left like a tape being written, and once
+   the row is full the tape slides left so the newest bar stays at the right edge.
 
 2. She lets go. Released finger = "send". (Sliding left = throw away. Sliding up = lock, so she
-   can stop holding.)
+   can stop holding: a small rail with a padlock sits above the mic, fills as her finger climbs,
+   and the padlock clicks shut when she reaches it.)
 
 3. If something interrupts her before she lets go - she switches apps, a call comes in, or the
    phone takes the audio away - the tape is not thrown away. It becomes a draft for that chat
@@ -87,7 +90,7 @@ internal fun recordGestureEnd(locked: Boolean, slidToCancel: Boolean, released: 
 }
 ```
 
-Never bring a deleted note back to life (`ClipRepositoryImpl.kt:309`):
+Never bring a deleted note back to life (`ClipRepositoryImpl.kt:317`):
 
 ```kotlin
 private fun updateClip(messageId, transform) = messageBox.store.callInTx {
@@ -110,6 +113,25 @@ private fun updateClip(messageId, transform) = messageBox.store.callInTx {
   still in the outbox, so retry works.
 - Alice deletes a note for everyone while Bob is playing it -> Bob's playback stops and his copy
   is deleted; the file in Storage is removed too.
+
+---
+
+## Why the waveform looks right on every phone
+
+Microphones differ a lot: a tablet may hear Alice ten times louder than a cheap phone. The app
+used to turn loudness into bar height in a straight line, so on quiet phones every bar was
+almost zero and the whole message looked like a flat line. Now it measures loudness in decibels
+(the way ears hear it) and then stretches each message so its loudest moment fills the bar.
+Messages that were already sent are stretched the same way when they are drawn, so old flat
+ones suddenly show their real ups and downs.
+
+```kotlin
+fun normalizeWaveform(levels: List<Int>): List<Int> {
+    val peak = levels.maxOrNull() ?: return levels                 // loudest moment
+    if (peak <= 0 || peak >= 100) return levels.map { it.coerceIn(0, 100) }  // silent or full already
+    return levels.map { (it.coerceAtLeast(0) * 100f / peak).roundToInt() }   // stretch to 100
+}
+```
 
 ---
 

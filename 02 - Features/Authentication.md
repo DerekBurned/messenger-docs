@@ -109,12 +109,13 @@ leak), runs `LogoutUseCase()` and resets state to a fresh `AuthUiState()`. `Logo
 (`domain/usecase/auth/LogoutUseCase.kt`) marks the user offline, runs
 `sessionCleaner.clearOnLogout(uid)`, signs out of Firebase and resets ObjectBox once (the
 duplicate `resetDB()` inside `FirebaseAuthService.logout()` was removed).
-`AndroidSessionCleaner.clearOnLogout` (`data/service/AndroidSessionCleaner.kt:31`):
+`AndroidSessionCleaner.clearOnLogout` (`data/service/AndroidSessionCleaner.kt:33`):
 
-- stops voice playback and cancels any recording on the main thread, then clears voice drafts,
+- stops clip playback and cancels any voice or video recording on the main thread, then clears
+  clip drafts,
 - deletes the FCM token in Firestore and on the device, cancels all notifications,
-- wipes the decrypted media cache, the voice-clip outbox and drafts, and Coil's disk cache
-  (`:47`-`:50`).
+- wipes the decrypted media cache, the clip outbox and drafts, and Coil's disk cache
+  (`:50`-`:53`).
 
 Work that outlives the screen also stops: `ChatsViewModel` runs its conversation listener inside
 `flatMapLatest` over auth state (`presentation/viewmodel/ChatsViewModel.kt:84`), so signing out

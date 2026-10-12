@@ -151,8 +151,8 @@ latest immediately.
 - Media transfer progress - `MediaTransferManager.transfers` re-exposed as
   `IMediaRepository.transfers: StateFlow<Map<String, MediaTransfer>>`
   (`data/repository/MediaRepositoryImpl.kt:60`).
-- Voice recording and playback - `VoiceRecorder.state` (`data/media/VoiceRecorder.kt:87`) and
-  `ClipPlaybackController.state` (`data/media/ClipPlaybackController.kt:88`) are app-wide
+- Voice recording and playback - `VoiceRecorder.state` (`data/media/VoiceRecorder.kt:109`) and
+  `ClipPlaybackController.state` (`data/media/ClipPlaybackController.kt:111`) are app-wide
   singletons, so the chat composer, the voice bubbles and the mini player across tabs all read
   one current value. See [[Voice Messages]].
 
@@ -182,14 +182,14 @@ Two mechanisms for "events, not state", chosen per site:
   wraps a collect in a `flow { }.flowOn(Dispatchers.IO)` (IO here because it drives a network
   snapshot stream and writes rows).
 - `combine` to merge streams: `ChatViewModel.observePartnerPresence`
-  (`presentation/viewmodel/ChatViewModel.kt:400`) combines the presence flow with a 60s
+  (`presentation/viewmodel/ChatViewModel.kt:455`) combines the presence flow with a 60s
   `tickerFlow` so the "last seen N minutes ago" label refreshes on a timer even when presence
   itself has not changed; `FirebasePresenceService.observeMultiplePresence`
   (`data/service/FirebasePresenceService.kt:30`) combines a list of per-user presence flows
   into a single `Map`.
 - `onEach { }.launchIn(scope)` for fire-and-forget collection into state:
-  `ChatViewModel.observePartnerAlias` (`presentation/viewmodel/ChatViewModel.kt:144`) and
-  `observeTransfers` (`presentation/viewmodel/ChatViewModel.kt:424`).
+  `ChatViewModel.observePartnerAlias` (`presentation/viewmodel/ChatViewModel.kt:151`) and
+  `observeTransfers` (`presentation/viewmodel/ChatViewModel.kt:479`).
 - `collectLatest` where a new emission should cancel work started for the previous one:
   `CallForegroundService.observeRemoteStatus`
   (`data/remote/call/CallForegroundService.kt:352`), `CallViewModel.observeActiveCall`
@@ -201,23 +201,34 @@ Two mechanisms for "events, not state", chosen per site:
   (`domain/usecase/message/GetMessageUseCase.kt:16`).
 - `withTimeoutOrNull` to bound a wait: `MediaRepositoryImpl.uploadAndSend`
   (`data/repository/MediaRepositoryImpl.kt:180`) caps a multi-file upload at 35s;
-  `ChatViewModel.jumpToMessage` (`presentation/viewmodel/ChatViewModel.kt:302`) bounds each
+  `ChatViewModel.jumpToMessage` (`presentation/viewmodel/ChatViewModel.kt:357`) bounds each
   page load while searching backward. Voice clips scale the wait with the file instead:
-  `clipUploadTimeout` (`data/repository/ClipRepositoryImpl.kt:381`) is 30s plus one second per
+  `clipUploadTimeout` (`data/repository/ClipRepositoryImpl.kt:389`) is 30s plus one second per
   8000 bytes, and the follow-up Firestore write is confirmed with
   `FirestoreService.sendMessage(..., confirmWithin = 20.seconds)`, which wraps `write.await()` in
   `withTimeoutOrNull` (`data/remote/firebase/FirestoreService.kt:152`).
 - A shared `Deferred` per key to deduplicate concurrent work: `InFlight`
-  (`data/repository/ClipRepositoryImpl.kt:384`) keeps one `async(start = CoroutineStart.LAZY)`
+  (`data/repository/ClipRepositoryImpl.kt:392`) keeps one `async(start = CoroutineStart.LAZY)`
   per message id, so two bubbles asking for the same clip download it once and both await the
   same result. The entry removes itself in `invokeOnCompletion`, so a failure is not cached.
+- A `CompletableDeferred` to turn a listener callback into one awaited result:
+  `VideoNoteRecorder.Session.result` (`data/media/VideoNoteRecorder.kt:109`) is completed exactly
+  once by CameraX's asynchronous `VideoRecordEvent.Finalize`. `stop` awaits it under
+  `withTimeoutOrNull(5_000)` in a `try`/`finally` (`:183`): if the waiting coroutine is cancelled
+  (the ViewModel was cleared) or the timeout fires, the `finally` keeps the clip as a draft
+  instead of dropping it. See [[Video Messages]].
+- `withContext(NonCancellable)` to protect shared state from cancellation:
+  `ProcessCameraProvider.awaitInstance` is wrapped in it (`VideoNoteRecorder.kt:211`) because
+  cancelling the awaiting coroutine would cancel CameraX's process-wide init future and break the
+  camera until the process dies. The coroutine checks afterwards whether its session is still
+  current and drops the result if not.
 
 ## Scopes and dispatchers - which one, and why
 
 - `viewModelScope` - all ViewModel work (`ChatViewModel`, `ChatsViewModel`,
   `AuthViewModel`, `CallViewModel`). Cancelled automatically in `onCleared`, so nothing
   outlives the screen. Manual `Job` handles (for example `typingHeartbeatJob` /
-  `typingStopJob`, `presentation/viewmodel/ChatViewModel.kt:86`) are cancelled explicitly to
+  `typingStopJob`, `presentation/viewmodel/ChatViewModel.kt:93`) are cancelled explicitly to
   debounce.
 - A `@Singleton` owning its own `CoroutineScope(SupervisorJob() + Dispatchers.IO)` - used where
   work must outlive any single screen. `MediaRepositoryImpl`
@@ -229,11 +240,13 @@ Two mechanisms for "events, not state", chosen per site:
   shape plus a `CoroutineExceptionHandler` that logs, so a failing voice-clip task can never crash
   the process; each send runs as a registered `Job` in `sendJobs` so retry and cancel can find it.
 - `CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)` - `VoiceRecorder`
-  (`data/media/VoiceRecorder.kt:84`) and `ClipPlaybackController`
-  (`data/media/ClipPlaybackController.kt:85`). Both drive a platform object (`MediaRecorder`,
+  (`data/media/VoiceRecorder.kt:106`) and `ClipPlaybackController`
+  (`data/media/ClipPlaybackController.kt:108`). Both drive a platform object (`MediaRecorder`,
   ExoPlayer) and an audio-focus listener; confining every call and state update to the main
   thread serialises start/stop/interrupt and player callbacks without locks, and ExoPlayer must
-  be used from the thread it was built on.
+  be used from the thread it was built on. `VideoNoteRecorder` (`data/media/VideoNoteRecorder.kt:112`)
+  uses the same scope for the same reason; CameraX events are delivered on the main executor
+  (`ContextCompat.getMainExecutor`), so every session transition happens on one thread.
 - `CoroutineScope(SupervisorJob() + Dispatchers.IO)` inside a `Service` - `CallForegroundService`
   (`data/remote/call/CallForegroundService.kt:57`) runs its call state machine (signaling
   writes, ringtones, timeouts) on this scope and cancels it in `onDestroy`
@@ -251,4 +264,4 @@ Two mechanisms for "events, not state", chosen per site:
 
 [[Presentation Layer (MVI)]] - [[Data Layer]] - [[Calls (Voice and Video)]] -
 [[Presence and Typing]] - [[End-to-End Encryption]] - [[Architecture Overview]] -
-[[Voice Messages]]
+[[Voice Messages]] - [[Video Messages]]

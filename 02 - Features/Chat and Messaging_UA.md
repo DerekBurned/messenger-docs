@@ -6,40 +6,40 @@ tags:
 
 Екран чату: надсилання/отримання тексту й медіа, відповіді, підтвердження прочитання, пагінація
 назад і два режими видалення повідомлень. Це найнасиченіша функціями область застосунку. Голосові
-кліпи ділять той самий екран, але мають власний конвеєр, описаний у
-[[Voice Messages_UA|Голосові повідомлення]].
+й відеокліпи ділять той самий екран, але мають власний конвеєр, описаний у
+[[Voice Messages_UA|Голосові повідомлення]] та [[Video Messages_UA|Відеоповідомлення]].
 
 ## Складові
 
-- `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:58`) - MVI
+- `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:64`) - MVI
   (`MviViewModel<ChatUiState, ChatIntent, ChatEffect>`).
-- State/Intent/Effect: `ChatUiState` (`presentation/state/chat/ChatUiState.kt:14`), `ChatIntent`
+- State/Intent/Effect: `ChatUiState` (`presentation/state/chat/ChatUiState.kt:16`), `ChatIntent`
   (`presentation/intent/ChatIntent.kt:8`), `ChatEffect` (`presentation/effect/ChatEffect.kt:6`).
 - `MessageRepositoryImpl` (`data/repository/MessageRepositoryImpl.kt`), `MediaRepositoryImpl`
   (`data/repository/MediaRepositoryImpl.kt`) і, для голосових кліпів, `ClipRepositoryImpl`
   (`data/repository/ClipRepositoryImpl.kt`).
 - Use case у `domain/usecase/message/`.
 - UI: `presentation/screens/chat/` (`ChatScreenWithNav`, `ChatScreenContent`, `MessageBubble`,
-  `MessageComposer`, `VoiceBubble`, ...) і компоненти в `presentation/components/chat/` та
+  `MessageComposer`, `VoiceBubble`, `VideoNoteBubble`, ...) і компоненти в `presentation/components/chat/` та
   `presentation/components/media/`.
 
 ## Реактивний список повідомлень
 
 Екран рендерить `ChatUiState.messages`, який живиться `loadMessages`
-(`presentation/viewmodel/ChatViewModel.kt:344`), що збирає `getMessagesUseCase(conversationId)`
+(`presentation/viewmodel/ChatViewModel.kt:399`), що збирає `getMessagesUseCase(conversationId)`
 (це `Flow<Resource<List<Message>>>`). Джерело - холодний ObjectBox-потік `getMessagesStream`
 (`data/repository/MessageRepositoryImpl.kt:34`), тож будь-який локальний запис повторно випромінює
-весь упорядкований невидалений список. Паралельно `syncMessages` (`ChatViewModel.kt:334`) збирає
+весь упорядкований невидалений список. Паралельно `syncMessages` (`ChatViewModel.kt:389`) збирає
 Firestore-потік оновлення, щоб втягнути віддалені рядки в ObjectBox. Повний аналіз потоку в
 [[Async and Reactivity_UA|Асинхронність і реактивність]].
 
 На кожному `Resource.Success` редьюсер також обчислює якір першого непрочитаного один раз
-(`ChatViewModel.kt:360`) і сплющує медіа-елементи для внутрішньочатової галереї
+(`ChatViewModel.kt:415`) і сплющує медіа-елементи для внутрішньочатової галереї
 (`conversationMedia`).
 
 ## Надсилання
 
-`ChatIntent.SendMessage(text)` -> `sendMessage` (`ChatViewModel.kt:504`). Якщо є очікувані
+`ChatIntent.SendMessage(text)` -> `sendMessage` (`ChatViewModel.kt:559`). Якщо є очікувані
 вкладення, маршрутизує до `sendMediaMessage`; інакше очищає набір, встановлює `isSending` і збирає
 `sendMessageUseCase(conversationId, text, replyTo)`. Репозиторій спершу пише в ObjectBox
 (повідомлення показується миттєво), потім пробує Firestore; за збою рядок іде у `FAILED` і ставиться
@@ -48,7 +48,7 @@ Firestore-потік оновлення, щоб втягнути віддале�
 
 ## Відповіді
 
-`ChatIntent.SetReplyTo(message)` встановлює `replyingTo` у стані (`ChatViewModel.kt:190`);
+`ChatIntent.SetReplyTo(message)` встановлює `replyingTo` у стані (`ChatViewModel.kt:197`);
 `SendMessageUseCase` захоплює обмежений сніпет повідомлення-відповіді
 (`domain/usecase/message/SendMessageUseCase.kt:47`) плюс `replyToMessageId`/`replyToSenderId`, тож
 бульбашка може відрендерити цитату, а `ChatIntent.JumpToMessage` - прокрутити до оригіналу. Сніпет
@@ -56,7 +56,7 @@ Firestore-потік оновлення, щоб втягнути віддале�
 текст обрізається до 200 символів, медіа бере підпис або "Media", кліп - свою мітку ("Voice
 message" / "Video message"), а дзвінки сніпета не мають. Голосові відповіді йдуть через ту саму
 функцію, тож голосове повідомлення зберігає цитату; надсилання медіа наразі очищає `replyingTo`, не
-прикріплюючи його (`ChatViewModel.kt:533`). `jumpToMessage` (`ChatViewModel.kt:302`) гортає назад
+прикріплюючи його (`ChatViewModel.kt:588`). `jumpToMessage` (`ChatViewModel.kt:357`) гортає назад
 (обмежено `MAX_JUMP_PAGES` і `withTimeoutOrNull` на сторінку), поки ціль не буде завантажена, потім
 підсвічує її на 2.5 с.
 
@@ -64,8 +64,8 @@ message" / "Video message"), а дзвінки сніпета не мають. �
 
 Вкладення стейджаться, потім надсилаються групою:
 - `ChatIntent.ToggleAttachment` / `AddAttachment` оновлюють `pendingAttachments`
-  (`ChatViewModel.kt:484`).
-- `sendMediaMessage` (`ChatViewModel.kt:525`) делегує
+  (`ChatViewModel.kt:539`).
+- `sendMediaMessage` (`ChatViewModel.kt:580`) делегує
   `mediaRepository.sendMediaMessage(conversationId, uris, caption)` і очищає стейджинг.
 - `MediaRepositoryImpl.sendMediaMessage` (`data/repository/MediaRepositoryImpl.kt:62`) виконується
   на власному scope репозиторію рівня застосунку `CoroutineScope(SupervisorJob() + Dispatchers.IO)`
@@ -94,7 +94,7 @@ message" / "Video message"), а дзвінки сніпета не мають. �
 
 ## Підтвердження прочитання
 
-`ChatIntent.MessagesSeen(messages)` -> `onMessagesSeen` (`ChatViewModel.kt:382`) позначає кожне
+`ChatIntent.MessagesSeen(messages)` -> `onMessagesSeen` (`ChatViewModel.kt:437`) позначає кожне
 щойно побачене повідомлення прочитаним рівно один раз (захищено `markedAsReadIds`) через
 `MarkMessageAsReadUseCase` і, якщо щось змінилося, `markConversationRead`. Репозиторій встановлює
 `status = READ` локально лише після успішного запису Firestore
@@ -104,7 +104,7 @@ message" / "Video message"), а дзвінки сніпета не мають. �
 
 ## Видалення повідомлення: для себе проти для всіх
 
-`ChatIntent.DeleteMessage(message, forEveryone)` -> `deleteMessage` (`ChatViewModel.kt:542`) ->
+`ChatIntent.DeleteMessage(message, forEveryone)` -> `deleteMessage` (`ChatViewModel.kt:597`) ->
 `DeleteMessageUseCase(message, forEveryone)`. Репозиторій розгалужується за прапорцем:
 
 - Для всіх - `MessageRepositoryImpl.deleteMessageForEveryone`
@@ -116,7 +116,7 @@ message" / "Video message"), а дзвінки сніпета не мають. �
   Лише відправник може видаляти для всіх. Він позначає локальний рядок `deleted = true` і викликає
   `FirestoreService.deleteMessage` (`FirestoreService.kt:220`), який встановлює `deleted = true` на
   документі, тож потік кожного учасника ховає його. За збою ставить у чергу повтор `DELETE`. Коли
-  видалене повідомлення - голосовий кліп, `DeleteMessageUseCase` також просить репозиторій кліпів
+  видалене повідомлення - голосовий чи відеокліп, `DeleteMessageUseCase` також просить репозиторій кліпів
   прибрати завантажений файл зі Storage (див. [[Voice Messages_UA|Голосові повідомлення]]).
 - Для себе - `deleteMessageForMe` (`MessageRepositoryImpl.kt:110`): позначає локальний рядок
   видаленим і викликає `FirestoreService.deleteMessageForMe` (`FirestoreService.kt:191`), який додає
@@ -131,10 +131,10 @@ message" / "Video message"), а дзвінки сніпета не мають. �
 
 Коли акаунт співрозмовника видалено, чат стежить за живим рядком користувача, а не за іменами й
 аватарами, замороженими в документі розмови. `ChatViewModel` встановлює `partnerDeleted`
-(`ChatViewModel.kt:169`, поле в `ChatUiState.kt:22`), і екран показує "Unknown user" з нейтральним
-аватаром і "Last seen long time ago" (`ChatScreenContent.kt:126`), вимикає обидві кнопки дзвінка в
+(`ChatViewModel.kt:176`, поле в `ChatUiState.kt:24`), і екран показує "Unknown user" з нейтральним
+аватаром і "Last seen long time ago" (`ChatScreenContent.kt:137`), вимикає обидві кнопки дзвінка в
 `ChatTopBar` (`presentation/components/chat/ChatTopBar.kt:133`, `:146`), ховає присутність і
-замінює композер пояснювальним повідомленням (`MessageComposer.kt:76`). Почати нову розмову з
+замінює композер пояснювальним повідомленням (`MessageComposer.kt:104`). Почати нову розмову з
 видаленим акаунтом не можна. Як видаляється акаунт - див. [[Settings_UA|Налаштування]].
 
 ## Нерозшифровані повідомлення
@@ -145,16 +145,20 @@ decrypted on this device" (`UNDECRYPTABLE_TEXT`, `data/crypto/E2eeMessageCodec.k
 
 ## Індикатор набору (сторона надсилання)
 
-`ChatIntent.TextChanged` -> `onTextChanged` (`ChatViewModel.kt:445`) дебаунсить: після 500 мс
+`ChatIntent.TextChanged` -> `onTextChanged` (`ChatViewModel.kt:500`) дебаунсить: після 500 мс
 набору викликає `typingService.setTyping`, а 5-секундний TTL-job очищає це; порожнє поле очищає
 одразу. Сторону отримання задокументовано в [[Presence and Typing_UA|Присутність і набір тексту]].
 
 ## Придушення сповіщень поки відкрито
 
 `ChatScreenWithNav` позначає розмову відкритою через `CurrentConversationHolder`
-(`presentation/screens/chat/ChatScreenWithNav.kt:144`, очищення на `:149`), що перевіряє
+(`presentation/screens/chat/ChatScreenWithNav.kt:158`, очищення на `:163`), що перевіряє
 `MyFirebaseMessagingService` (`data/remote/firebase/MyFirebaseMessagingService.kt:103`), щоб не
-сповіщати про чат, на який користувач уже дивиться. Див. [[Notifications_UA|Сповіщення]].
+сповіщати про чат, на який користувач уже дивиться. Див. [[Notifications_UA|Сповіщення]]. Той
+самий `onDispose` також надсилає `ChatIntent.InterruptRecording` (`:165`-`:167`), якщо активність
+не просто змінює конфігурацію, тож перехід із чату на інший екран перетворює запущений (навіть
+заблокований) голосовий чи відеозапис на чернетку замість того, щоб лишати мікрофон чи камеру
+увімкненими.
 
 ## Бульбашки чату потребують входу
 
@@ -179,4 +183,4 @@ decrypted on this device" (`UNDECRYPTABLE_TEXT`, `data/crypto/E2eeMessageCodec.k
 [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]] -
 [[Presence and Typing_UA|Присутність і набір тексту]] - [[Notifications_UA|Сповіщення]] -
 [[End-to-End Encryption_UA|Наскрізне шифрування]] - [[Conversations List_UA|Список розмов]] -
-[[Voice Messages_UA|Голосові повідомлення]]
+[[Voice Messages_UA|Голосові повідомлення]] - [[Video Messages_UA|Відеоповідомлення]]

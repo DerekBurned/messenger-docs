@@ -18,8 +18,8 @@ Files covered:
 
 ## 1. MVI contract
 
-`PendingAttachment.kt` and `ChatUiState.kt` (blank lines between fields dropped; the voice
-fields are covered in [[Voice Messages - Code]]):
+`PendingAttachment.kt` and `ChatUiState.kt` (blank lines between fields dropped; the voice and
+video fields are covered in [[Voice Messages - Code]] and [[Video Messages - Code]]):
 
 ```kotlin
 @Immutable
@@ -50,8 +50,11 @@ data class ChatUiState(
     val pendingAttachments: List<PendingAttachment> = emptyList(),
     val conversationMedia: List<MediaItem> = emptyList(),
     val recording: VoiceRecordState = VoiceRecordState.Idle,
-    val voiceDraft: VoiceRecording? = null,
+    val videoRecording: VideoRecordState = VideoRecordState.Idle,
+    val clipMode: ClipKind = ClipKind.VOICE,
+    val clipDraft: ClipRecording? = null,
     val micDenied: Boolean = false,
+    val micDeniedForVideo: Boolean = false,
 ) : UiState
 ```
 
@@ -84,8 +87,9 @@ sealed interface ChatIntent : UiIntent {
     data object InterruptRecording : ChatIntent
     data object SendVoiceDraft : ChatIntent
     data object DiscardVoiceDraft : ChatIntent
-    data class MicPermissionDenied(val permanently: Boolean) : ChatIntent
+    data class MicPermissionDenied(val permanently: Boolean, val video: Boolean = false) : ChatIntent
     data object DismissMicPrompt : ChatIntent
+    data object ToggleClipMode : ChatIntent
     data class PlayClip(val messageId: String) : ChatIntent
     data class SeekClip(val fraction: Float) : ChatIntent
     data class RetryClip(val messageId: String) : ChatIntent

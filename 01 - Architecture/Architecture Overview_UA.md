@@ -62,7 +62,7 @@ Firestore, Realtime Database, Storage чи crypto-кодека. Це точка 
 ## Наскрізний потік даних: надсилання й показ текстового повідомлення
 
 1. UI надсилає `ChatIntent.SendMessage(text)` до `ChatViewModel`
-   (`handleIntent`, `presentation/viewmodel/ChatViewModel.kt:186`).
+   (`handleIntent`, `presentation/viewmodel/ChatViewModel.kt:193`).
 2. ViewModel викликає `SendMessageUseCase`
    (`domain/usecase/message/SendMessageUseCase.kt:17`), який будує `Message.Text` з `UUID`-id та
    `MessageStatus.SENDING`, а потім викликає репозиторій.

@@ -69,8 +69,8 @@ tags:
 - `recordSearched(user)` викликається з `SearchUsersViewModel.createConversationWithUser`
   (`SearchUsersViewModel.kt:60`), коли натиснуто результат/підказку.
 - `recordOpened(userId, name, avatar)` викликається з `ChatViewModel.init`
-  (`ChatViewModel.kt:124`) щоразу при відкритті чату, і ще раз, коли завантажиться аватар
-  співрозмовника (`ChatViewModel.kt:176`), щоб зберегти аватар.
+  (`ChatViewModel.kt:131`) щоразу при відкритті чату, і ще раз, коли завантажиться аватар
+  співрозмовника (`ChatViewModel.kt:183`), щоб зберегти аватар.
 - `observeRecentSearched` / `observeRecentOpened` (`RecentContactsRepository.kt:39`, `:46`) -
   реактивні читання на базі `queryFlow`, впорядковані за міткою часу за спаданням, зіставлені в
   `List<User>` і зібрані в `SearchUsersUiState` в `init` в'юмоделі (`SearchUsersViewModel.kt:31`).

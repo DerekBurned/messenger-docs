@@ -54,7 +54,7 @@ signed in and dispatches on `data["type"]`:
 - anything else -> a fallback notification from the FCM `notification` block.
 
 `CurrentConversationHolder` is set by `ChatScreenWithNav` while open
-(`presentation/screens/chat/ChatScreenWithNav.kt:144`), which is how the "do not notify for the
+(`presentation/screens/chat/ChatScreenWithNav.kt:158`), which is how the "do not notify for the
 chat I am looking at" rule works.
 
 The server side is the `onMessageCreated` Cloud Function. It sends the data push with a

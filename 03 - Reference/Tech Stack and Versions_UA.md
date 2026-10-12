@@ -120,10 +120,16 @@ git він досі є. Збірка без нього проходить і з�
 - Coil 3 `3.5.0` (`libs.versions.toml:41`) - завантаження зображень; `coil-video` для мініатюр
   кадрів відео, `coil-network-okhttp` для fetcher. Налаштовується в `MessengerApplication.onCreate`.
 - Media3 (ExoPlayer + UI) `1.10.0` (`libs.versions.toml:42`) - відтворення відео й голосових
-  повідомлень (`ClipPlaybackController`).
+  повідомлень (`ClipPlaybackController`), а з 12.10.2026 також круглих відеонотаток, які
+  виводяться в `TextureView` через `attachVideo` / `detachVideo`. Див.
+  [[Video Messages_UA|Відеоповідомлення]].
 - Платформний `MediaRecorder` (AAC у MPEG-4, 64 кбіт/с моно) - запис голосу; без додаткових
   бібліотек. Див. [[Voice Messages_UA|Голосові повідомлення]].
-- CameraX `1.4.2` (`libs.versions.toml:43`) - живе прев'ю камери й захоплення.
+- CameraX `1.4.2` (`libs.versions.toml:43`) - живе прев'ю камери й захоплення
+  (`LifecycleCameraController`), а також круглі відеонотатки (`VideoNoteRecorder`:
+  `ProcessCameraProvider` + `Preview` + `VideoCapture<Recorder>`, прив'язані до
+  `ProcessLifecycleOwner`, SD з 1,2 Мбіт/с). Для відеонотаток використано API нижчого рівня, бо
+  контролер не дає задати бітрейт кодера, а цього вимагає ліміт Storage у 40 MB.
 
 ## Crypto - E2EE
 

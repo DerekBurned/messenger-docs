@@ -17,7 +17,7 @@ interface UiEffect
 ```
 
 - State - an immutable snapshot the UI renders. One `data class` per screen in
-  `presentation/state/` (for example `ChatUiState`, `presentation/state/chat/ChatUiState.kt:14`),
+  `presentation/state/` (for example `ChatUiState`, `presentation/state/chat/ChatUiState.kt:16`),
   annotated `@Immutable` so Compose can skip recomposition when the reference is unchanged.
 - Intent - a user action the UI sends down. A sealed interface per screen in
   `presentation/intent/` (for example `ChatIntent`, `presentation/intent/ChatIntent.kt:8`).
@@ -84,11 +84,11 @@ that call ViewModel methods directly rather than routing every action through a 
 The codebase does not force one pattern. Both are present and both are legitimate:
 
 1. Intent-routed MVI (extends `MviViewModel`). Examples: `ChatViewModel`
-   (`presentation/viewmodel/ChatViewModel.kt:58`), `AuthViewModel`
+   (`presentation/viewmodel/ChatViewModel.kt:64`), `AuthViewModel`
    (`presentation/viewmodel/AuthViewModel.kt:34`), `ChangePhoneViewModel`,
    `DeleteAccountViewModel`, `EditProfileViewModel`. The UI only ever calls `dispatch(intent)`;
    `handleIntent` is a single `when` over the sealed intent
-   (`presentation/viewmodel/ChatViewModel.kt:183`).
+   (`presentation/viewmodel/ChatViewModel.kt:190`).
 2. Method-and-StateFlow (extends plain `ViewModel` / `AndroidViewModel`). Example:
    `ChatsViewModel` (`presentation/viewmodel/ChatsViewModel.kt:35`) exposes a
    `MutableStateFlow(...).asStateFlow()` plus public methods (`deleteConversation`,
@@ -138,12 +138,12 @@ The goal is "run this handler once per emitted event, only while visible, on the
 foreground and cancels it when it leaves, which prevents a backgrounded screen from
 navigating or toasting. `Dispatchers.Main.immediate` avoids an unnecessary re-dispatch when
 already on main, so an effect that triggers navigation runs synchronously in the same frame.
-`ChatScreenWithNav` uses this helper (`presentation/screens/chat/ChatScreenWithNav.kt:75`).
+`ChatScreenWithNav` uses this helper (`presentation/screens/chat/ChatScreenWithNav.kt:83`).
 
 ## Reducing state: the `setState { copy(...) }` pattern
 
 Every state mutation goes through the reducer. From `ChatViewModel`
-(`presentation/viewmodel/ChatViewModel.kt:435`):
+(`presentation/viewmodel/ChatViewModel.kt:490`):
 
 ```kotlin
 setState {
@@ -157,7 +157,7 @@ setState {
 Because `ChatUiState` is an immutable `data class`, `copy` produces a new instance; `StateFlow`
 compares by equality and only emits when something actually changed, so identical updates do
 not cause recomposition. Reads inside the ViewModel use `currentState`
-(`presentation/viewmodel/ChatViewModel.kt:221`) for the latest snapshot without collecting.
+(`presentation/viewmodel/ChatViewModel.kt:229`) for the latest snapshot without collecting.
 
 ## UiText: error/message strings that survive to compose time
 
@@ -172,7 +172,7 @@ throughout the ViewModels.
 ## Process death and `SavedStateHandle`
 
 Screen-scoped ViewModels read their navigation arguments from `SavedStateHandle`, which is
-restored across process death. `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:80`):
+restored across process death. `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:87`):
 
 ```kotlin
 val conversationId: String = savedStateHandle.get<String>("conversationId") ?: ""
@@ -189,7 +189,7 @@ function of state. The root obtains the ViewModel with `hiltViewModel()`, collec
 `collectAsStateWithLifecycle`, wires `ObserveAsEvents` for effects, and passes `state` plus
 `onIntent`/callbacks into a stateless screen composable. The chat screen follows this across
 files in `presentation/screens/chat/`: `ChatScreenWithNav` obtains the ViewModel
-(`ChatScreenWithNav.kt:62`), collects state (`:70`) and effects (`:75`), and hands state plus
+(`ChatScreenWithNav.kt:70`), collects state (`:78`) and effects (`:83`), and hands state plus
 `ChatIntent` callbacks to `ChatScreenContent`, which renders `ChatUiState`; `ChatScreenPreview`
 renders the same content with fake state. Other screens use the same `Screen` / `ScreenContent`
 / `ScreenPreview` file split (auth, settings, delete account). Keeping the

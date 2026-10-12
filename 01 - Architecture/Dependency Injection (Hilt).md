@@ -21,9 +21,10 @@ supply `@HiltWorker` support.
   `AuthViewModel`, `ChatsViewModel`, `CallViewModel`, `ClipPlayerViewModel`, ...); the UI
   obtains them with `hiltViewModel()` (`presentation/navigation/graph/AppNavigation.kt:27`).
 - Classes with an `@Inject constructor` and `@Singleton` need no module entry at all. The voice
-  pipeline is built this way: `VoiceRecorder` (`data/media/VoiceRecorder.kt:77`),
-  `ClipPlaybackController` (`data/media/ClipPlaybackController.kt:79`) and `VoiceDraftStore`
-  (`data/media/VoiceDraftStore.kt:32`).
+  pipeline is built this way: `VoiceRecorder` (`data/media/VoiceRecorder.kt:99`),
+  `VideoNoteRecorder` (`data/media/VideoNoteRecorder.kt:93`), `ClipPlaybackController`
+  (`data/media/ClipPlaybackController.kt:102`) and `VoiceDraftStore`
+  (`data/media/VoiceDraftStore.kt:33`).
 
 ## The modules (`di/`, 11 files)
 

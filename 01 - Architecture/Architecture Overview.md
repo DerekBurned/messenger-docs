@@ -58,7 +58,7 @@ network is a writer/refresher behind it. Full detail in [[Data Layer]].
 ## End-to-end data flow: sending and seeing a text message
 
 1. UI dispatches `ChatIntent.SendMessage(text)` to `ChatViewModel`
-   (`handleIntent`, `presentation/viewmodel/ChatViewModel.kt:186`).
+   (`handleIntent`, `presentation/viewmodel/ChatViewModel.kt:193`).
 2. The ViewModel calls `SendMessageUseCase`
    (`domain/usecase/message/SendMessageUseCase.kt:17`), which builds a `Message.Text` with a
    `UUID` id and `MessageStatus.SENDING`, then calls the repository.

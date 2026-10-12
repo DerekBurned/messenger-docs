@@ -148,7 +148,7 @@ These features currently assume the full `List<Message>` lives in `ChatUiState`
   timestamp order) exposed as a small non-paged flow. Media count is far smaller than message
   count, so it does not need paging.
 - `jumpToMessage` keeps its bounded loop (the `MAX_JUMP_PAGES` guard and per-page timeout at
-  `ChatViewModel.kt:194`) but drives it by triggering appends and inspecting
+  `ChatViewModel.kt:201`) but drives it by triggering appends and inspecting
   `lazyPagingItems.itemSnapshotList` until the id is present, then calls
   `LazyListState.scrollToItem(index)`.
 - The unread anchor (`firstUnreadMessageId`) is resolved once from the first loaded page

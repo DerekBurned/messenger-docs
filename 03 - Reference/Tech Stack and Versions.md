@@ -117,10 +117,15 @@ older git history. A build without one succeeds and the app launches, but calls 
   thumbnails, `coil-network-okhttp` for the fetcher. Configured in
   `MessengerApplication.onCreate`.
 - Media3 (ExoPlayer + UI) `1.10.0` (`libs.versions.toml:42`) - video playback and voice-message
-  playback (`ClipPlaybackController`).
+  playback (`ClipPlaybackController`), and since 2026-10-12 also round video notes, rendered into
+  a `TextureView` attached through `attachVideo` / `detachVideo`. See [[Video Messages]].
 - Platform `MediaRecorder` (AAC in MPEG-4, 64 kbps mono) - voice recording; no extra library. See
   [[Voice Messages]].
-- CameraX `1.4.2` (`libs.versions.toml:43`) - live camera preview cell and capture.
+- CameraX `1.4.2` (`libs.versions.toml:43`) - live camera preview cell and capture
+  (`LifecycleCameraController`), and round video notes (`VideoNoteRecorder`:
+  `ProcessCameraProvider` + `Preview` + `VideoCapture<Recorder>` bound to `ProcessLifecycleOwner`,
+  SD at 1.2 Mbps). The video-note path uses the lower-level API because the controller cannot set
+  the encoder bitrate, which the 40 MB Storage limit requires.
 
 ## Crypto - E2EE
 

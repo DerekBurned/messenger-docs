@@ -58,7 +58,7 @@ FCM-токен записується в документ Firestore корист
 - будь-що інше -> запасне сповіщення з блоку `notification` FCM.
 
 `CurrentConversationHolder` встановлюється `ChatScreenWithNav`, поки відкрито
-(`presentation/screens/chat/ChatScreenWithNav.kt:144`), і саме так працює правило "не сповіщати
+(`presentation/screens/chat/ChatScreenWithNav.kt:158`), і саме так працює правило "не сповіщати
 про чат, на який я дивлюся".
 
 Серверна частина - Cloud Function `onMessageCreated`. Вона надсилає data-пуш із `preview`: тип

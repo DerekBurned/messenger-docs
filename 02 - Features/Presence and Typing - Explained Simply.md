@@ -37,7 +37,7 @@ the board becomes correct.
 
 1. As you type, the app waits 500ms (so it does not spam on every keystroke), then writes a note
    under `typing/{chatId}/{yourId}` (`ChatViewModel.onTextChanged`,
-   `presentation/viewmodel/ChatViewModel.kt:445`).
+   `presentation/viewmodel/ChatViewModel.kt:500`).
 
 2. It also sets a 5-second self-clear, and clears immediately if you empty the box.
 
@@ -77,7 +77,7 @@ Not spamming presence writes (`data/presence/PresenceManager.kt:24`):
 private val transitions = Channel<PresenceState>(Channel.CONFLATED)
 ```
 
-Typing: debounce + auto-clear (`presentation/viewmodel/ChatViewModel.kt:324`):
+Typing: debounce + auto-clear (`presentation/viewmodel/ChatViewModel.kt:379`):
 
 ```kotlin
 typingJob = viewModelScope.launch {

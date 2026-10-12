@@ -63,8 +63,8 @@ result or suggestion - runs `createConversationWithUser`, which also records the
 - `recordSearched(user)` is called from `SearchUsersViewModel.createConversationWithUser`
   (`SearchUsersViewModel.kt:60`) when a result/suggestion is tapped.
 - `recordOpened(userId, name, avatar)` is called from `ChatViewModel.init`
-  (`ChatViewModel.kt:124`) whenever a chat is opened, and again once the partner avatar loads
-  (`ChatViewModel.kt:176`) so the stored avatar is filled in.
+  (`ChatViewModel.kt:131`) whenever a chat is opened, and again once the partner avatar loads
+  (`ChatViewModel.kt:183`) so the stored avatar is filled in.
 - `observeRecentSearched` / `observeRecentOpened` (`RecentContactsRepository.kt:39`, `:46`) are
   `queryFlow`-backed reactive reads ordered by their timestamp desc, mapped to `List<User>`, and
   collected into `SearchUsersUiState` in the ViewModel's `init` (`SearchUsersViewModel.kt:31`).

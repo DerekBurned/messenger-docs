@@ -155,8 +155,8 @@ fun observeConnectionState(): Flow<Boolean> = callbackFlow {
 - Прогрес передавання медіа - `MediaTransferManager.transfers`, повторно відкритий як
   `IMediaRepository.transfers: StateFlow<Map<String, MediaTransfer>>`
   (`data/repository/MediaRepositoryImpl.kt:60`).
-- Запис і відтворення голосу - `VoiceRecorder.state` (`data/media/VoiceRecorder.kt:87`) та
-  `ClipPlaybackController.state` (`data/media/ClipPlaybackController.kt:88`) - singleton-и рівня
+- Запис і відтворення голосу - `VoiceRecorder.state` (`data/media/VoiceRecorder.kt:109`) та
+  `ClipPlaybackController.state` (`data/media/ClipPlaybackController.kt:111`) - singleton-и рівня
   застосунку, тож композер чату, голосові бульбашки й міні-плеєр на всіх вкладках читають одне
   поточне значення. Див. [[Voice Messages_UA|Голосові повідомлення]].
 
@@ -186,14 +186,14 @@ compare-and-set, що робить конкурентні редьюсери б�
   обгортає collect у `flow { }.flowOn(Dispatchers.IO)` (тут IO, бо це керує мережевим
   snapshot-потоком і записує рядки).
 - `combine` для злиття потоків: `ChatViewModel.observePartnerPresence`
-  (`presentation/viewmodel/ChatViewModel.kt:400`) комбінує потік присутності з 60-секундним
+  (`presentation/viewmodel/ChatViewModel.kt:455`) комбінує потік присутності з 60-секундним
   `tickerFlow`, тож напис "останній раз у мережі N хвилин тому" оновлюється за таймером, навіть
   коли сама присутність не змінилася; `FirebasePresenceService.observeMultiplePresence`
   (`data/service/FirebasePresenceService.kt:30`) комбінує список потоків присутності по
   користувачах в єдиний `Map`.
 - `onEach { }.launchIn(scope)` для збирання "запустив і забув" у стан:
-  `ChatViewModel.observePartnerAlias` (`presentation/viewmodel/ChatViewModel.kt:144`) і
-  `observeTransfers` (`presentation/viewmodel/ChatViewModel.kt:424`).
+  `ChatViewModel.observePartnerAlias` (`presentation/viewmodel/ChatViewModel.kt:151`) і
+  `observeTransfers` (`presentation/viewmodel/ChatViewModel.kt:479`).
 - `collectLatest` там, де нове випромінювання має скасувати роботу, розпочату для попереднього:
   `CallForegroundService.observeRemoteStatus`
   (`data/remote/call/CallForegroundService.kt:352`), `CallViewModel.observeActiveCall`
@@ -205,23 +205,34 @@ compare-and-set, що робить конкурентні редьюсери б�
   (`domain/usecase/message/GetMessageUseCase.kt:16`).
 - `withTimeoutOrNull` для обмеження очікування: `MediaRepositoryImpl.uploadAndSend`
   (`data/repository/MediaRepositoryImpl.kt:180`) обмежує завантаження кількох файлів 35 секундами;
-  `ChatViewModel.jumpToMessage` (`presentation/viewmodel/ChatViewModel.kt:302`) обмежує кожне
+  `ChatViewModel.jumpToMessage` (`presentation/viewmodel/ChatViewModel.kt:357`) обмежує кожне
   завантаження сторінки під час пошуку назад. Голосові кліпи натомість масштабують очікування з
-  розміром файлу: `clipUploadTimeout` (`data/repository/ClipRepositoryImpl.kt:381`) - це 30 с плюс
+  розміром файлу: `clipUploadTimeout` (`data/repository/ClipRepositoryImpl.kt:389`) - це 30 с плюс
   одна секунда на кожні 8000 байтів, а наступний запис у Firestore підтверджується через
   `FirestoreService.sendMessage(..., confirmWithin = 20.seconds)`, що обгортає `write.await()` у
   `withTimeoutOrNull` (`data/remote/firebase/FirestoreService.kt:152`).
 - Спільний `Deferred` на ключ для дедуплікації паралельної роботи: `InFlight`
-  (`data/repository/ClipRepositoryImpl.kt:384`) тримає один `async(start = CoroutineStart.LAZY)` на
+  (`data/repository/ClipRepositoryImpl.kt:392`) тримає один `async(start = CoroutineStart.LAZY)` на
   id повідомлення, тож дві бульбашки, що просять той самий кліп, завантажують його один раз і обидві
   чекають той самий результат. Запис прибирає себе в `invokeOnCompletion`, тож збій не кешується.
+- `CompletableDeferred`, щоб перетворити колбек слухача на один очікуваний результат:
+  `VideoNoteRecorder.Session.result` (`data/media/VideoNoteRecorder.kt:109`) завершується рівно
+  один раз асинхронним `VideoRecordEvent.Finalize` від CameraX. `stop` чекає його під
+  `withTimeoutOrNull(5_000)` у `try`/`finally` (`:183`): якщо корутину, що чекає, скасовано
+  (ViewModel очищено) або вийшов час, `finally` зберігає кліп як чернетку замість того, щоб його
+  загубити. Див. [[Video Messages_UA|Відеоповідомлення]].
+- `withContext(NonCancellable)`, щоб захистити спільний стан від скасування:
+  `ProcessCameraProvider.awaitInstance` обгорнуто в нього (`VideoNoteRecorder.kt:211`), бо
+  скасування корутини, що чекає, скасувало б глобальний для процесу future ініціалізації CameraX і
+  зламало б камеру до завершення процесу. Після цього корутина перевіряє, чи її сесія ще поточна,
+  і відкидає результат, якщо ні.
 
 ## Скоупи й диспетчери - який і чому
 
 - `viewModelScope` - уся робота ViewModel (`ChatViewModel`, `ChatsViewModel`,
   `AuthViewModel`, `CallViewModel`). Скасовується автоматично в `onCleared`, тож ніщо не переживає
   екран. Ручні хендли `Job` (наприклад `typingHeartbeatJob` / `typingStopJob`,
-  `presentation/viewmodel/ChatViewModel.kt:86`) скасовуються явно для дебаунсу.
+  `presentation/viewmodel/ChatViewModel.kt:93`) скасовуються явно для дебаунсу.
 - `@Singleton`, що володіє власним `CoroutineScope(SupervisorJob() + Dispatchers.IO)` -
   використовується там, де робота має пережити будь-який окремий екран. `MediaRepositoryImpl`
   (`data/repository/MediaRepositoryImpl.kt:57`): завантаження, розпочате з екрана чату, має
@@ -233,11 +244,14 @@ compare-and-set, що робить конкурентні редьюсери б�
   що логує, тож збій задачі голосового кліпу ніколи не обвалить процес; кожне надсилання працює як
   зареєстрований `Job` у `sendJobs`, тож повтор і скасування можуть його знайти.
 - `CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)` - `VoiceRecorder`
-  (`data/media/VoiceRecorder.kt:84`) і `ClipPlaybackController`
-  (`data/media/ClipPlaybackController.kt:85`). Обидва керують платформним об'єктом (`MediaRecorder`,
+  (`data/media/VoiceRecorder.kt:106`) і `ClipPlaybackController`
+  (`data/media/ClipPlaybackController.kt:108`). Обидва керують платформним об'єктом (`MediaRecorder`,
   ExoPlayer) і слухачем аудіофокусу; обмеження кожного виклику й оновлення стану головним потоком
   серіалізує start/stop/interrupt та колбеки плеєра без блокувань, а ExoPlayer треба
-  використовувати з того потоку, на якому його створено.
+  використовувати з того потоку, на якому його створено. `VideoNoteRecorder`
+  (`data/media/VideoNoteRecorder.kt:112`) використовує той самий scope з тієї ж причини; події
+  CameraX приходять на головний executor (`ContextCompat.getMainExecutor`), тож кожен перехід
+  сесії відбувається в одному потоці.
 - `CoroutineScope(SupervisorJob() + Dispatchers.IO)` всередині `Service` - `CallForegroundService`
   (`data/remote/call/CallForegroundService.kt:57`) виконує машину станів дзвінка (записи
   сигналізації, рінгтони, таймаути) на цьому scope і скасовує його в `onDestroy`

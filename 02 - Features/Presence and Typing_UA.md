@@ -63,7 +63,7 @@ scope викликача (`viewModelScope` з auth, або scope спостер�
 `ValueEventListener` у `UserPresence(state, lastSeen)`. `observeMultiplePresence` (`:30`)
 `combine`-ить список потоків по користувачах в єдиний `Map<String, UserPresence>` - використовується
 списком розмов, щоб підсвітити кожен рядок (див. [[Conversations List_UA|Список розмов]]). У чаті
-`ChatViewModel.observePartnerPresence` (`presentation/viewmodel/ChatViewModel.kt:400`) `combine`-ить
+`ChatViewModel.observePartnerPresence` (`presentation/viewmodel/ChatViewModel.kt:455`) `combine`-ить
 потік присутності з 60-секундним ticker, тож напис "останній раз у мережі N хвилин тому"
 оновлюється, навіть коли присутність сама не змінилася. Прибирання `callbackFlow` + `awaitClose` в
 [[Async and Reactivity_UA|Асинхронність і реактивність]].
@@ -74,7 +74,7 @@ scope викликача (`viewModelScope` з auth, або scope спостер�
 самоочищується: він прибирається, чи то користувач виходить з чату, згортає застосунок, чи процес
 убито - тож співрозмовник ніколи не бачить назавжди застряглий "набирає...".
 
-- Вихідний: `ChatViewModel.onTextChanged` (`presentation/viewmodel/ChatViewModel.kt:445`) дебаунсить
+- Вихідний: `ChatViewModel.onTextChanged` (`presentation/viewmodel/ChatViewModel.kt:500`) дебаунсить
   500 мс перед `typingService.setTyping`, із 5-секундним TTL-очищенням та миттєвим очищенням при
   порожньому вводі. `FirebaseTypingService.setTyping` (`FirebaseTypingService.kt:28`) пише вузол
   timestamp для поточного користувача.
@@ -82,7 +82,7 @@ scope викликача (`viewModelScope` з auth, або scope спостер�
   реєструє `onDisconnect().removeValue()` на вузлі *перед* записом, дзеркалячи `setupOnDisconnect`
   для присутності. Збій, втрата мережі чи вбивство процесу змушують сервер Firebase прибрати вузол
   набору. `clearTyping` (`:85`) скасовує цей обробник перед видаленням вузла при чистому очищенні.
-- Очищення при виході з екрана: `ChatViewModel.onCleared` (`ChatViewModel.kt:561`) викликає
+- Очищення при виході з екрана: `ChatViewModel.onCleared` (`ChatViewModel.kt:616`) викликає
   несуспендний `typingService.clearTypingNow` (`FirebaseTypingService.kt:38` ->
   `RealtimeDbService.kt:91`). `viewModelScope` там уже скасовано, тож очищення не може бути
   suspend-викликом у ньому; `clearTypingNow` виконує `removeValue()` без очікування й скасовує
@@ -98,7 +98,7 @@ scope викликача (`viewModelScope` з auth, або scope спостер�
       .map { it.key }
       .toSet()
   ```
-  `ChatViewModel.observeTyping` (`ChatViewModel.kt:430`) збирає це в `isPartnerTyping` /
+  `ChatViewModel.observeTyping` (`ChatViewModel.kt:485`) збирає це в `isPartnerTyping` /
   `typingUsernames`, показане як напис "набирає..." у шапці чату.
 
 ## Чому Realtime Database (а не Firestore) для цього

@@ -21,7 +21,7 @@ mailbox. If the mailbox is jammed, you keep the note flagged "not sent yet" and 
 ## Step by step: sending "hello"
 
 1. You type and hit send. The screen fires `ChatIntent.SendMessage("hello")` -> `sendMessage`
-   (`presentation/viewmodel/ChatViewModel.kt:504`).
+   (`presentation/viewmodel/ChatViewModel.kt:559`).
 
 2. `SendMessageUseCase` builds a `Message.Text` with a fresh id, status `SENDING`, and (if you
    were replying) a short snippet of the original.

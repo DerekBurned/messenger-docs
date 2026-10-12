@@ -25,8 +25,9 @@ Hilt `2.59.2` (`gradle/libs.versions.toml:19`), обробляється чер�
   `ChatsViewModel`, `CallViewModel`, `ClipPlayerViewModel`, ...); UI отримує їх через
   `hiltViewModel()` (`presentation/navigation/graph/AppNavigation.kt:27`).
 - Класам з `@Inject constructor` і `@Singleton` взагалі не потрібен запис у модулі. Так зібрано
-  голосовий конвеєр: `VoiceRecorder` (`data/media/VoiceRecorder.kt:77`), `ClipPlaybackController`
-  (`data/media/ClipPlaybackController.kt:79`) і `VoiceDraftStore` (`data/media/VoiceDraftStore.kt:32`).
+  голосовий конвеєр: `VoiceRecorder` (`data/media/VoiceRecorder.kt:99`), `VideoNoteRecorder`
+  (`data/media/VideoNoteRecorder.kt:93`), `ClipPlaybackController`
+  (`data/media/ClipPlaybackController.kt:102`) і `VoiceDraftStore` (`data/media/VoiceDraftStore.kt:33`).
 
 ## Модулі (`di/`, 11 файлів)
 

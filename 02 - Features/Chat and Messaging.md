@@ -1,40 +1,41 @@
 # Chat and Messaging
 
 The chat screen: send/receive text and media, replies, read receipts, backward paging, and the
-two message-deletion modes. This is the most feature-dense area of the app. Voice clips share
-the screen but have their own pipeline, documented in [[Voice Messages]].
+two message-deletion modes. This is the most feature-dense area of the app. Voice and video clips
+share the screen but have their own pipeline, documented in [[Voice Messages]] and
+[[Video Messages]].
 
 ## Pieces
 
-- `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:58`) - MVI
+- `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:64`) - MVI
   (`MviViewModel<ChatUiState, ChatIntent, ChatEffect>`).
-- State/Intent/Effect: `ChatUiState` (`presentation/state/chat/ChatUiState.kt:14`), `ChatIntent`
+- State/Intent/Effect: `ChatUiState` (`presentation/state/chat/ChatUiState.kt:16`), `ChatIntent`
   (`presentation/intent/ChatIntent.kt:8`), `ChatEffect` (`presentation/effect/ChatEffect.kt:6`).
 - `MessageRepositoryImpl` (`data/repository/MessageRepositoryImpl.kt`),
   `MediaRepositoryImpl` (`data/repository/MediaRepositoryImpl.kt`) and, for voice clips,
   `ClipRepositoryImpl` (`data/repository/ClipRepositoryImpl.kt`).
 - Use cases in `domain/usecase/message/`.
 - UI: `presentation/screens/chat/` (`ChatScreenWithNav`, `ChatScreenContent`, `MessageBubble`,
-  `MessageComposer`, `VoiceBubble`, ...) and components in `presentation/components/chat/` and
+  `MessageComposer`, `VoiceBubble`, `VideoNoteBubble`, ...) and components in `presentation/components/chat/` and
   `presentation/components/media/`.
 
 ## The reactive message list
 
 The screen renders `ChatUiState.messages`, fed by `loadMessages`
-(`presentation/viewmodel/ChatViewModel.kt:344`), which collects
+(`presentation/viewmodel/ChatViewModel.kt:399`), which collects
 `getMessagesUseCase(conversationId)` (a `Flow<Resource<List<Message>>>`). The source is the cold
 ObjectBox stream `getMessagesStream` (`data/repository/MessageRepositoryImpl.kt:34`), so any
 local write re-emits the whole ordered, non-deleted list. In parallel, `syncMessages`
-(`ChatViewModel.kt:334`) collects the Firestore refresh stream to pull remote rows into
+(`ChatViewModel.kt:389`) collects the Firestore refresh stream to pull remote rows into
 ObjectBox. Full stream analysis in [[Async and Reactivity]].
 
 On each `Resource.Success` the reducer also computes the first-unread anchor once
-(`ChatViewModel.kt:360`) and flattens media items for the in-chat gallery
+(`ChatViewModel.kt:415`) and flattens media items for the in-chat gallery
 (`conversationMedia`).
 
 ## Sending
 
-`ChatIntent.SendMessage(text)` -> `sendMessage` (`ChatViewModel.kt:504`). If there are pending
+`ChatIntent.SendMessage(text)` -> `sendMessage` (`ChatViewModel.kt:559`). If there are pending
 attachments it routes to `sendMediaMessage`; otherwise it clears typing, sets `isSending`, and
 collects `sendMessageUseCase(conversationId, text, replyTo)`. The repository writes to ObjectBox
 first (message shows instantly), then attempts Firestore; on failure the row goes `FAILED` and a
@@ -43,7 +44,7 @@ offline-first section of [[Data Layer]].
 
 ## Replies
 
-`ChatIntent.SetReplyTo(message)` sets `replyingTo` in state (`ChatViewModel.kt:190`);
+`ChatIntent.SetReplyTo(message)` sets `replyingTo` in state (`ChatViewModel.kt:197`);
 `SendMessageUseCase` captures a capped snippet of the replied-to message
 (`domain/usecase/message/SendMessageUseCase.kt:47`) plus `replyToMessageId`/`replyToSenderId` so
 the bubble can render the quote and `ChatIntent.JumpToMessage` can scroll to the original. The
@@ -51,15 +52,15 @@ snippet comes from `Message.replySnippet()` (`domain/model/Message.kt:72`, `REPL
 200` at `:80`): text is cut to 200 characters, media uses the caption or "Media", a clip uses its
 label ("Voice message" / "Video message"), and calls have none. Voice replies go through the same
 function, so a voice note keeps its quote; media sends currently clear `replyingTo` without
-attaching it (`ChatViewModel.kt:533`). `jumpToMessage` (`ChatViewModel.kt:302`) pages backward (bounded by `MAX_JUMP_PAGES` and a per-page
+attaching it (`ChatViewModel.kt:588`). `jumpToMessage` (`ChatViewModel.kt:357`) pages backward (bounded by `MAX_JUMP_PAGES` and a per-page
 `withTimeoutOrNull`) until the target is loaded, then highlights it for 2.5s.
 
 ## Media attachments
 
 Attachments are staged then sent as a group:
 - `ChatIntent.ToggleAttachment` / `AddAttachment` update `pendingAttachments`
-  (`ChatViewModel.kt:484`).
-- `sendMediaMessage` (`ChatViewModel.kt:525`) delegates to
+  (`ChatViewModel.kt:539`).
+- `sendMediaMessage` (`ChatViewModel.kt:580`) delegates to
   `mediaRepository.sendMediaMessage(conversationId, uris, caption)` and clears the staging.
 - `MediaRepositoryImpl.sendMediaMessage` (`data/repository/MediaRepositoryImpl.kt:62`) runs on
   the repository's own app-scoped `CoroutineScope(SupervisorJob() + Dispatchers.IO)`
@@ -85,7 +86,7 @@ Download is the mirror: `ChatIntent.DownloadMedia` -> `downloadMedia`
 
 ## Read receipts
 
-`ChatIntent.MessagesSeen(messages)` -> `onMessagesSeen` (`ChatViewModel.kt:382`) marks each
+`ChatIntent.MessagesSeen(messages)` -> `onMessagesSeen` (`ChatViewModel.kt:437`) marks each
 newly seen message read exactly once (guarded by `markedAsReadIds`) via
 `MarkMessageAsReadUseCase` and, if anything changed, `markConversationRead`. The repository sets
 `status = READ` locally only after the Firestore write succeeds
@@ -95,7 +96,7 @@ the read state is preserved when remote refreshes overwrite rows
 
 ## Message deletion: for-me vs for-everyone
 
-`ChatIntent.DeleteMessage(message, forEveryone)` -> `deleteMessage` (`ChatViewModel.kt:542`) ->
+`ChatIntent.DeleteMessage(message, forEveryone)` -> `deleteMessage` (`ChatViewModel.kt:597`) ->
 `DeleteMessageUseCase(message, forEveryone)`. The repository splits on the flag:
 
 - For everyone - `MessageRepositoryImpl.deleteMessageForEveryone`
@@ -107,8 +108,8 @@ the read state is preserved when remote refreshes overwrite rows
   Only the sender may delete for everyone. It marks the local row `deleted = true` and calls
   `FirestoreService.deleteMessage` (`FirestoreService.kt:220`), which sets `deleted = true` on
   the document so every participant's stream hides it. On failure it enqueues a `DELETE` retry.
-  When the deleted message is a voice clip, `DeleteMessageUseCase` also asks the clip repository
-  to remove the uploaded file from Storage (see [[Voice Messages]]).
+  When the deleted message is a voice or video clip, `DeleteMessageUseCase` also asks the clip
+  repository to remove the uploaded file from Storage (see [[Voice Messages]]).
 - For me - `deleteMessageForMe` (`MessageRepositoryImpl.kt:110`): marks the local row deleted
   and calls `FirestoreService.deleteMessageForMe` (`FirestoreService.kt:191`), which adds the
   current uid to the document's `deletedFor` array. On read, `applyDeletedFor`
@@ -122,11 +123,11 @@ deletion re-emits the list without the row.
 
 When the partner's account has been deleted, the chat follows the live user row instead of the
 names and avatars frozen into the conversation document. `ChatViewModel` sets
-`partnerDeleted` (`ChatViewModel.kt:169`, field in `ChatUiState.kt:22`), and the screen then shows
-"Unknown user" with a neutral avatar and "Last seen long time ago" (`ChatScreenContent.kt:126`),
+`partnerDeleted` (`ChatViewModel.kt:176`, field in `ChatUiState.kt:24`), and the screen then shows
+"Unknown user" with a neutral avatar and "Last seen long time ago" (`ChatScreenContent.kt:137`),
 disables both call buttons in `ChatTopBar` (`presentation/components/chat/ChatTopBar.kt:133`,
 `:146`), hides presence, and replaces the composer with an explanatory notice
-(`MessageComposer.kt:76`). Starting a new conversation with a deleted account is refused. See
+(`MessageComposer.kt:104`). Starting a new conversation with a deleted account is refused. See
 [[Settings]] for how an account is deleted.
 
 ## Undecryptable messages
@@ -137,16 +138,19 @@ this device" (`UNDECRYPTABLE_TEXT`, `data/crypto/E2eeMessageCodec.kt:181`) rathe
 
 ## Typing indicator (outgoing side)
 
-`ChatIntent.TextChanged` -> `onTextChanged` (`ChatViewModel.kt:445`) debounces: after 500ms of
+`ChatIntent.TextChanged` -> `onTextChanged` (`ChatViewModel.kt:500`) debounces: after 500ms of
 typing it calls `typingService.setTyping`, and a 5s TTL job clears it; a blank field clears
 immediately. The incoming side is documented in [[Presence and Typing]].
 
 ## Notification suppression while open
 
 `ChatScreenWithNav` marks the conversation open via `CurrentConversationHolder`
-(`presentation/screens/chat/ChatScreenWithNav.kt:144`, cleared at `:149`), which
+(`presentation/screens/chat/ChatScreenWithNav.kt:158`, cleared at `:163`), which
 `MyFirebaseMessagingService` checks (`data/remote/firebase/MyFirebaseMessagingService.kt:103`) to
-avoid notifying for the chat the user is already looking at. See [[Notifications]].
+avoid notifying for the chat the user is already looking at. See [[Notifications]]. The same
+`onDispose` also dispatches `ChatIntent.InterruptRecording` (`:165`-`:167`) unless the activity
+is only changing configuration, so leaving the chat for another screen turns a running (even
+locked) voice or video recording into a draft instead of leaving the microphone or camera on.
 
 ## Chat bubbles need a signed-in user
 
@@ -184,4 +188,5 @@ flowchart TD
 
 [[Data Layer]] - [[Async and Reactivity]] - [[Presentation Layer (MVI)]] -
 [[Presence and Typing]] - [[Notifications]] - [[End-to-End Encryption]] -
-[[Conversations List]] - [[Voice Messages]] - [[Chat and Messaging - Basic Example]]
+[[Conversations List]] - [[Voice Messages]] - [[Video Messages]] -
+[[Chat and Messaging - Basic Example]]

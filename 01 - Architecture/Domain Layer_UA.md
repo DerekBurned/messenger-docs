@@ -100,7 +100,8 @@ Agora виражена в доменних термінах, а `AgoraCallServic
 `MessageRepositoryImpl.previewLabel`, `data/repository/MessageRepositoryImpl.kt:209`).
 `Message.replySnippet()` (`:72`) - єдине правило для цитат відповіді. Навантаження кліпу - `Clip`
 (`domain/model/voiceMessage/Clip.kt:6`), sealed-клас із `Voice` (хвиля, ліміт 1 година
-`MAX_DURATION_MS`, мітка "Voice message", `m4a`) і `Video` (лише бульбашка-заглушка); кожен підтип
+`MAX_DURATION_MS`, мітка "Voice message", `m4a`) і `Video` (круглі відеонотатки, ліміт 2 хвилини,
+`mp4`, див. [[Video Messages_UA|Відеоповідомлення]]); кожен підтип
 несе власні `previewLabel`, `fileExtension` і `maxDurationMs`, тож прев'ю, пуші й UI мають одне
 джерело міток. Типи сесії: `SessionState` (`Resolving` / `SignedOut(reason)` / `Active(user)`) з
 `SessionEndReason` (`PROFILE_MISSING`, `ACCOUNT_DELETED`) і `RemoteUserSnapshot(user,
