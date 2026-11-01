@@ -60,6 +60,11 @@ Every feature has an "Explained Simply" companion:
 - [[Navigation]] - the session gate (`SessionState`), Navigation 3 typed routes, the
   `NavDisplay` back stack, and how nav arguments reach a ViewModel's `SavedStateHandle`.
 
+Design proposals (researched, not implemented):
+
+- [[Multi-Device Encryption (Research)]] - keeping E2EE working on several devices at once: a
+  shared account keyring wrapped per device, QR linking, and revocation by epoch rotation.
+
 Historical design records (kept for context, not current behaviour):
 
 - [[Paging 3 Integration (Design)]] - Paging 3 shipped on 2026-07-25 and was reverted on
