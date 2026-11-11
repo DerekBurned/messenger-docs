@@ -22,7 +22,7 @@ Alice opens the app and wants to register with phone `+123` and username `alice`
 
 1. Alice types her number and taps send. The screen fires an "intent" (a described action):
    `AuthIntent.SendVerificationCode(...)`. The ViewModel receives it in `handleIntent`
-   (`presentation/viewmodel/AuthViewModel.kt:64`).
+   (`presentation/screens/auth/AuthViewModel.kt:73`).
 
 2. The app asks Firebase to text a code: `firebaseAuthService.sendVerificationCode(...)`
    (`data/remote/auth/FirebaseAuthService.kt:38`). The screen shows a spinner
@@ -33,11 +33,11 @@ Alice opens the app and wants to register with phone `+123` and username `alice`
    `AuthIntent.VerifyOtpAndLogin(code)`.
 
 4. The app turns the code plus the ticket number into proof (`verifyCode(code, verificationId)` ->
-   a `PhoneAuthCredential`) and signs in: `signInWithPhone` (`AuthViewModel.kt:212`) calls
+   a `PhoneAuthCredential`) and signs in: `signInWithPhone` (`AuthViewModel.kt:254`) calls
    `loginWithPhoneNumberUseCase`.
 
 5. The rules run (`AuthRepositoryImpl.loginWithPhone`,
-   `data/repository/AuthRepositoryImpl.kt:27`): if this is a brand-new number and Alice chose
+   `data/repository/AuthRepositoryImpl.kt:36`): if this is a brand-new number and Alice chose
    register, it creates her profile in Firebase. (If the number already existed, the account was
    deleted, or she picked login for an unknown number, it politely refuses.) While this runs the
    app holds a "sign-in in progress" flag so nothing else decides she is signed out half way.
@@ -73,7 +73,7 @@ sequenceDiagram
 
 ## The code, with plain-English comments
 
-The app-wide switch (`AuthViewModel.kt:78`):
+The app-wide switch (`AuthViewModel.kt:111`-`:118`):
 
 ```kotlin
 private fun observeSession() {

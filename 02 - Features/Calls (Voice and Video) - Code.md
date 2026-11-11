@@ -8,7 +8,7 @@ complete. Full "why" is in the main note.
 Files covered:
 - `data/remote/call/ActiveCallHolder.kt`, `data/remote/call/CallForegroundService.kt`,
   `data/remote/call/AgoraCallService.kt`, `data/remote/call/FirebaseCallSignalingService.kt`
-- `presentation/state/CallUiState.kt`, `presentation/viewmodel/CallViewModel.kt`
+- `presentation/screens/call/CallUiState.kt`, `presentation/screens/call/CallViewModel.kt`
 - `presentation/components/call/{ActiveCallBar, CallBarPresenter}.kt`
 - `data/repository/CallHistoryRepository.kt`
 
@@ -63,22 +63,30 @@ object ActiveCallHolder {
 `presentation/components/call/CallBarPresenter.kt` in full:
 
 ```kotlin
-enum class CallBarMode { BAR, HIDDEN, BUBBLE }
+enum class CallBarMode { BAR, HIDDEN, BUBBLE, VIDEO }   // model/CallBarMode.kt:3
 
-object CallBarPresenter {
-    private val _mode = MutableStateFlow(CallBarMode.BAR)
-    val mode: StateFlow<CallBarMode> = _mode.asStateFlow()
+object CallBarPresenter {                                // CallBarPresenter.kt:9
+    val mode: StateFlow<CallBarMode>
+    var bubbleOffset: Offset?
+    var videoDismissed: Boolean                          // read-only outside
+    var floatingEnabled: Boolean                         // read-only outside
 
-    @Volatile var bubbleOffset: Offset? = null
-
-    fun showBar() { _mode.value = CallBarMode.BAR }
-    fun hide() { _mode.value = CallBarMode.HIDDEN }
-    fun minimizeToBubble() { _mode.value = CallBarMode.BUBBLE }
-    fun reset() { _mode.value = CallBarMode.BAR; bubbleOffset = null }
+    fun setFloatingEnabled(enabled: Boolean)  // :27
+    fun showBar()                             // :33
+    fun minimizeToBubble()                    // :37, no-op unless floatingEnabled
+    fun showVideoTile()                       // :42
+    fun collapseVideoTile()                   // :47
+    fun hide()                                // :51
+    fun restore()                             // :58
+    fun reset()                               // :67
 }
 ```
 
-`presentation/state/CallUiState.kt` in full - a flat mirror of `ActiveCall` for the UI:
+(Signatures only; the bodies are a few lines each over a `MutableStateFlow<CallBarMode>`.) `VIDEO` is
+the floating video tile, `setFloatingEnabled` is driven by the `calls_floating_bubble` flag from
+`MainDisplay` (`MainDisplay.kt:154`-`:155`), and `hide`/`restore` remember the mode to come back to.
+
+`presentation/screens/call/CallUiState.kt` in full - a flat mirror of `ActiveCall` for the UI:
 
 ```kotlin
 data class CallUiState(
@@ -290,6 +298,7 @@ class CallForegroundService : Service() {
     @Inject lateinit var signalingService: ICallSignalingService
     @Inject lateinit var missedCallRecorder: MissedCallRecorder
     @Inject lateinit var tokenProvider: AgoraTokenProvider
+    @Inject lateinit var mediaGate: CallMediaGate      // feature-flag gate for video / speaker / camera flip (:56)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var tickerJob: Job? = null
@@ -362,6 +371,12 @@ class CallForegroundService : Service() {
 }
 ```
 
+Outgoing calls (`handleStartOutgoing`, `:129`) go through `scope.signalThenJoin(...)` (`:1033`): the
+signal write (which also creates the `callChannels/{channel}` entry the `getRtcToken` function checks)
+is launched first, local audio/video setup runs while it is in flight, and `fetchTokenAndJoin` (`:726`)
+runs only after the write has completed. See "RTC tokens are issued only to the caller and callee" in
+[[Calls (Voice and Video)]].
+
 Everything runs on `scope = SupervisorJob() + Dispatchers.IO`; the named timeout jobs (ring 60s,
 requesting 30s, outgoing 65s, reconnect 20s) make each call edge case deterministic;
 `stopSelfClean` and `onDestroy` guarantee no job - and no leaked Telecom connection - outlives the
@@ -377,7 +392,7 @@ builders, audio focus, ringback, presence tracking) are in the source and narrat
 
 ## 6. CallViewModel
 
-`presentation/viewmodel/CallViewModel.kt` - the UI mirror. Key parts:
+`presentation/screens/call/CallViewModel.kt` - the UI mirror. Key parts:
 
 ```kotlin
 @HiltViewModel
@@ -388,6 +403,7 @@ class CallViewModel @Inject constructor(
     private val userRepository: IUserRepository,
     private val telecomCallManager: TelecomCallManager,
     private val callService: ICallService,
+    private val featureFlags: FeatureFlags,
     savedStateHandle: SavedStateHandle,
 ) : AndroidViewModel(application) {
 
@@ -421,14 +437,15 @@ class CallViewModel @Inject constructor(
         }
     }
 
-    fun startOutgoing() { /* build TelecomCallMeta + CallForegroundService.outgoingIntent, startForegroundService, telecom.placeOutgoing */ }
+    val outgoingAllowed: Boolean   // CALLS, and CALLS_VIDEO for video (:177)
+    fun startOutgoing() { /* blocked -> CallExit.Unavailable; else build TelecomCallMeta + CallForegroundService.outgoingIntent, startForegroundService, telecom.placeOutgoing */ }
     fun acceptCall()  = sendAction(CallForegroundService.ACTION_ACCEPT)
     fun declineCall() = sendAction(CallForegroundService.ACTION_DECLINE)
     fun endCall()     = sendAction(CallForegroundService.ACTION_END)
     fun toggleMute()  = sendAction(CallForegroundService.ACTION_TOGGLE_MUTE)
-    fun toggleSpeaker() = sendAction(CallForegroundService.ACTION_TOGGLE_SPEAKER)
-    fun toggleCamera() = sendAction(CallForegroundService.ACTION_TOGGLE_CAMERA)
-    fun switchCamera() = sendAction(CallForegroundService.ACTION_SWITCH_CAMERA)
+    fun toggleSpeaker()  { /* turning on: refused if CALLS_SPEAKER is off (:227) */ sendAction(CallForegroundService.ACTION_TOGGLE_SPEAKER) }
+    fun toggleCamera()   { /* turning on: refused if CALLS_VIDEO is off (:233) */ sendAction(CallForegroundService.ACTION_TOGGLE_CAMERA) }
+    fun switchCamera()   { /* refused if CALLS_FLIP_CAMERA is off (:239) */ sendAction(CallForegroundService.ACTION_SWITCH_CAMERA) }
     fun bindLocalVideo(view: SurfaceView) = callService.bindLocalVideo(view)
     fun bindRemoteVideo(view: SurfaceView) { /* callService.bindRemoteVideo(view, CallUids.fromUserId(partnerId)) */ }
 
@@ -438,6 +455,9 @@ class CallViewModel @Inject constructor(
     }
 }
 ```
+
+Since PR #68 the VM also holds a `FeatureFlags` and refuses flagged actions itself (see "Feature flag"
+in [[Calls (Voice and Video)]]); the same checks exist again in the service through `CallMediaGate`.
 
 The VM holds no call logic - it collects `ActiveCallHolder.state` (`collectLatest`), copies each
 field into `CallUiState`, and turns user actions into `startService` intents. The one-shot exit is

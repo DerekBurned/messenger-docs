@@ -55,6 +55,65 @@ Alice sends Bob a 10-second video note.
 
 ---
 
+## The code, with plain-English comments
+
+What happens to the film when recording ends (`videoFinalizeOutcome`,
+`data/media/VideoNoteRecorder.kt:87`):
+
+```kotlin
+when {
+    // Alice pressed the trash / slid left: always throw it away.
+    requested == VideoEnd.DISCARD -> VideoEnd.DISCARD
+    // Empty file, shorter than 1 second, or the camera reported a real error: nothing worth keeping.
+    fileBytes <= 0L || durationMs < MIN_VIDEO_DURATION_MS || error !in USABLE_FINALIZE_ERRORS -> VideoEnd.DISCARD
+    // Otherwise do what was asked; if nobody asked (the 2-minute limit hit by itself), keep it as a draft.
+    else -> requested ?: VideoEnd.DRAFT
+}
+```
+
+Turning a finger position on the ring into "how far through the clip"
+(`ringFraction`, `presentation/screens/chat/VideoNoteBubble.kt:87`):
+
+```kotlin
+// Angle of the finger around the circle's centre, measured from 12 o'clock, clockwise: 0 .. 1.
+val turns = atan2(x - cx, -(y - cy)) / (2f * PI.toFloat())
+return (turns + 1f) % 1f
+```
+
+Fitting a wide frame into a round window (`centerCropScale`, `VideoNoteBubble.kt:95`):
+
+```kotlin
+// Scale so the SMALLER side fills the window, then let the longer side overflow and be cropped.
+val scale = max(viewW.toFloat() / videoW, viewH.toFloat() / videoH)
+```
+
+---
+
+## A worked example
+
+- Alice holds the mic for 0.6 seconds and lets go with her finger still. The film is shorter than 1
+  second, so `videoFinalizeOutcome` says "throw away" and nothing is sent.
+- She tries again and films 10 seconds, then slides up to lock, then taps send. The request is
+  `SEND`, the file is usable, so the clip goes into the outbox and is uploaded.
+- Halfway through a third clip a phone call comes in. The request becomes `DRAFT`; Alice finds
+  the clip waiting in the chat with Send and Discard buttons after the call.
+- If the team switches the `video_notes` flag off in Remote Config, the camera mode stops being
+  offered and the app refuses to start the camera even from an old screen - see
+  [[Feature Flags and Remote Config]].
+
+---
+
+## Why, in one line each
+
+- Why wait for `Finalize`? The file is not complete until CameraX says so.
+- Why throw away clips under a second? An accidental touch should not send an empty circle.
+- Why keep a clip as a draft when the 2-minute limit hits by itself? The person never chose to
+  stop, so losing the take would be the worse surprise.
+- Why crop at display time? A normal 4:3 recording works on every phone; the circle is just a mask.
+- Why a ring you drag? The circle has no room for a seek bar, so its edge is the seek bar.
+
+---
+
 ## Why the camera is handled so carefully
 
 - The camera is shared by the whole app (the photo/video capture screen uses it too). Cancelling
@@ -68,4 +127,4 @@ Alice sends Bob a 10-second video note.
 ## Related
 
 [[Video Messages]] - [[Video Messages - Code]] - [[Video Messages - Basic Example]] -
-[[Voice Messages - Explained Simply]] - [[Home]]
+[[Voice Messages - Explained Simply]] - [[Feature Flags and Remote Config]] - [[Home]]

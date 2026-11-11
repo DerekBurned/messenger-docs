@@ -13,10 +13,10 @@ you across tabs. Round video notes share all of this and are documented in [[Vid
 ## Pieces
 
 - Model: `Message.Clip` (`domain/model/Message.kt:57`) carrying a `Clip`
-  (`domain/model/voiceMessage/Clip.kt:6`): `Clip.Voice` (url, duration, size, `fileKey`,
+  (`domain/model/voicemessage/Clip.kt:6`): `Clip.Voice` (url, duration, size, `fileKey`,
   `waveform`) and `Clip.Video`. Each subtype owns its `previewLabel` ("Voice message" /
   "Video message"), `fileExtension` (`m4a` / `mp4`) and `maxDurationMs` (voice: 1 hour).
-  `ClipKind` (`domain/model/voiceMessage/ClipKind.kt`) names the two kinds for recording code.
+  `ClipKind` (`domain/model/voicemessage/ClipKind.kt`) names the two kinds for recording code.
 - Recording: `VoiceRecorder` (`data/media/VoiceRecorder.kt:100`), an app-wide `@Singleton`
   confined to the main thread, exposing `StateFlow<VoiceRecordState>`. A finished take is a
   `ClipRecording(conversationId, file, durationMs, waveform, kind)` (`:55`).
@@ -28,38 +28,38 @@ you across tabs. Round video notes share all of this and are documented in [[Vid
   exposing `StateFlow<ClipPlaybackState>`.
 - Files: `MediaCache` (`clip_outbox`, `voice_drafts`, `chat_media`) and `MediaFileTransfer`
   (encrypted upload/download), see [[Data Layer]].
-- UI: `RecordMicButton.kt` (the `recordGesture` modifier), `RecordingBar`,
+- UI: `RecordGesture.kt` (the `recordGesture` modifier), `RecordingBar`,
   `LiveRecordingWaveform`, `RecordLockRail`, `VoiceDraftBar`, `VoiceWaveform`, `ReplyQuote` in
   `presentation/components/chat/`; `VoiceBubble` and `MessageComposer` in
   `presentation/screens/chat/`; `ClipMiniPlayer`
-  (`presentation/components/common/ClipMiniPlayer.kt:64`) with `ClipPlayerViewModel`, mounted in
-  `MainDisplay` (`presentation/navigation/graph/MainDisplay.kt:620`).
+  (`presentation/components/common/ClipMiniPlayer.kt:66`) with `ClipPlayerViewModel`, mounted in
+  `MainDisplay` (`presentation/navigation/graph/MainDisplay.kt:634`).
 - Wiring: `ChatIntent` intents handled in `ChatViewModel` (`StartRecording`, `LockRecording`,
   `CancelRecording`, `FinishRecording`, `InterruptRecording`, `SendVoiceDraft`,
   `DiscardVoiceDraft`, `ToggleClipMode`, `MicPermissionDenied`, `DismissMicPrompt`, `PlayClip`,
   `SeekClip`, `RetryClip`, `CancelClipSend`). Each recording intent goes to whichever recorder
   (voice or video) is active.
 - Backend: `firestore.rules` (`hasValidClip`), `storage.rules` (`chatMedia/...`), and the
-  `onMessageCreated` function's push preview (`CLIP_PREVIEWS`, `functions/src/index.ts:19`).
+  `onMessageCreated` function's push preview (`CLIP_PREVIEWS`, `functions/src/index.ts:33`).
 
 ## Recording
 
 ### Tap or hold
 
 The mic button carries `Modifier.recordGesture`
-(`presentation/components/chat/RecordMicButton.kt:31`). After touch-down it waits up to 200 ms
-(`withTimeoutOrNull(HOLD_TO_RECORD_MS)`, `:60`):
+(`presentation/components/chat/RecordGesture.kt:31`). After touch-down it waits up to 200 ms
+(`withTimeoutOrNull(HOLD_TO_RECORD_MS)`, `:62`):
 
 - released inside the window -> a tap: `ToggleClipMode` switches voice <-> video and a hint
   bubble explains the mode for 2 s; nothing is recorded;
 - pointer lost inside the window -> nothing happens;
 - still held after 200 ms -> `StartRecording`.
 
-Drag deltas are measured in root coordinates (`positionInRoot`, `:54`), so the gesture still works
+Drag deltas are measured in root coordinates (`positionInRoot`, `:56`), so the gesture still works
 if the composer moves under the finger. That was a real bug: the lock rail made the composer
 taller, the mic jumped up 57 px under a 120 px slide, the lock never engaged, and releasing sent
 the note. The rail and the hint are now laid out by `floatAboveEnd`
-(`presentation/screens/chat/MessageComposer.kt:372`), a `layout` modifier that reports a 0 x 0
+(`presentation/screens/chat/MessageComposer.kt:395`), a `layout` modifier that reports a 0 x 0
 size so floating overlays never resize the composer.
 
 ### The recorder
@@ -79,7 +79,7 @@ scaled to 0..100. The state keeps the last 256 levels plus `sampleCount` for the
 the recording ends the levels are downsampled to 50 buckets (`downsampleWaveform`, `:67`) and
 peak-normalised (`normalizeWaveform`, `:87`) so the loudest bucket is 100.
 
-`VoiceWaveform` (`presentation/components/chat/VoiceWaveform.kt:28`) also runs
+`VoiceWaveform` (`presentation/components/chat/VoiceWaveform.kt:20`) also runs
 `normalizeWaveform` on every stored waveform before drawing. This repairs notes recorded before
 2026-10-12: the old code mapped amplitude linearly (`amp * 100 / 32767`), so phones with quiet
 microphones produced levels of 3 to 12 that all sat on the 12% minimum bar height and looked flat,
@@ -98,7 +98,7 @@ started huge and shrank with every sample.
 
 ### Gesture outcomes
 
-Decided by `recordGestureEnd(locked, slidToCancel, released)` (`RecordMicButton.kt:19`):
+Decided by `recordGestureEnd(locked, slidToCancel, released)` (`RecordGesture.kt:19`):
 
 - slide left past 100 dp -> `CancelRecording`, the file is deleted; the "Slide to cancel" label
   follows the finger and fades with `dragProgress` (`:25`);
@@ -106,7 +106,7 @@ Decided by `recordGestureEnd(locked, slidToCancel, released)` (`RecordMicButton.
   (`presentation/components/chat/RecordLockRail.kt:40`) fills from the bottom towards a padlock
   whose shackle closes with the same progress, with a bobbing chevron as the idle hint;
   `RecordingBar` then shows discard and stop, and both stop and the send button finish and send
-  (`MessageComposer.kt:257`);
+  (`MessageComposer.kt:200`, `:266`);
 - release -> `FinishRecording` -> `stop(conversationId)` -> send;
 - any other end of the gesture (the system cancelling the pointer) -> `InterruptRecording`, which
   keeps a draft.
@@ -115,7 +115,7 @@ A recording belongs to one chat: `VoiceRecordState.Recording` carries `conversat
 `visibleTo(conversationId)` (`VoiceRecorder.kt:50`) shows it as `Idle` to every other chat, so a
 locked recording in chat A cannot be finished or cancelled from chat B. Recordings shorter than
 500 ms are discarded. `MessageComposer` keeps the screen on while either recorder is recording
-(`KeepScreenOn(enabled = recordingActive)`, `:103`).
+(`KeepScreenOn(enabled = recordingActive)`, `:104`).
 
 ## Interruptions become drafts
 
@@ -130,7 +130,7 @@ locked recording in chat A cannot be finished or cancelled from chat B. Recordin
 - the gesture ends without a release (see above);
 - the chat screen leaves composition for anything but a configuration change, e.g. opening the
   partner's profile on top of the chat
-  (`presentation/screens/chat/ChatScreenWithNav.kt:166`);
+  (`presentation/screens/chat/ChatScreenWithNav.kt:164`);
 - the chat's ViewModel is cleared (`onCleared` -> `interrupt(conversationId)`).
 
 `VoiceDraftStore.save` moves the file to `filesDir/voice_drafts/<conversationId>.m4a` and writes a
@@ -149,7 +149,7 @@ pointer on every device, so the recording simply continues.
 
 `sendRecording` builds a `Clip.Voice(durationMs, sizeBytes, waveform)` (or a `Clip.Video`, see
 [[Video Messages]]) and calls `clipRepository.sendClip(conversationId, file, clip, replyTo)`.
-`sendClip` (`ClipRepositoryImpl.kt:82`):
+`sendClip` (`ClipRepositoryImpl.kt:84`):
 
 1. rejects a clip over its duration limit;
 2. moves the file into `filesDir/clip_outbox/<messageId>.m4a`, writes a `Message.Clip` row with
@@ -157,11 +157,11 @@ pointer on every device, so the recording simply continues.
    conversation preview to "Voice message";
 3. `launchSend` registers a lazy `Job` in `sendJobs` and starts it.
 
-`uploadAndSend` (`:244`):
+`uploadAndSend` (`:249`):
 
 - uploads the outbox file to `chatMedia/<conversationId>/<messageId>/clip.m4a`, encrypted with a
   per-file key when the conversation is encryptable, under
-  `withTimeoutOrNull(clipUploadTimeout(size))` - 30 s plus one second per 8000 bytes (`:389`);
+  `withTimeoutOrNull(clipUploadTimeout(size))` - 30 s plus one second per 8000 bytes (`clipUploadTimeout`, `:401`);
 - on failure: cancel and clear the transfer, mark `FAILED`;
 - on success: `updateClip` writes the URL and key inside an ObjectBox transaction that re-reads
   the row and returns `null` if the clip was deleted meanwhile, in which case the uploaded file is
@@ -170,8 +170,8 @@ pointer on every device, so the recording simply continues.
   the server becomes `FAILED` instead of hanging in `SENDING`;
 - marks `SENT` and promotes the file from the outbox into the cache.
 
-Retry (`RetryClip` -> `retry`, `:195`) atomically claims only a `FAILED`, non-deleted row that has
-no live job. Cancel during upload (`CancelClipSend` -> `cancelSend`, `:213`) cancels the job and
+Retry (`RetryClip` -> `retry`, `:200`) atomically claims only a `FAILED`, non-deleted row that has
+no live job. Cancel during upload (`CancelClipSend` -> `cancelSend`, `:218`) cancels the job and
 transfer and, unless the clip already went out, deletes the row and the outbox file.
 
 ## Encryption
@@ -184,13 +184,13 @@ duration and size but an empty waveform. See [[End-to-End Encryption]].
 
 ## Recovery after process death
 
-`ClipRepositoryImpl.init` runs `recoverAfterRestart` (`ClipRepositoryImpl.kt:291`):
+`ClipRepositoryImpl.init` runs `recoverAfterRestart` (`ClipRepositoryImpl.kt:296`, launched from `init`, `:76`):
 
 - delete stale temporaries (`recording_*`, `*.dl`, `*.part`, `*.enc`) older than this process;
 - adopt pre-outbox cache files of unsent clips into the outbox;
 - mark `FAILED` every clip still `SENDING` from an earlier process with no live job
-  (`strandedClipIds`, `ClipRepositoryImpl.kt:366`), so it shows a retry button;
-- reconcile the outbox (`outboxFate`, `ClipRepositoryImpl.kt:379`): keep files of
+  (`strandedClipIds`, `ClipRepositoryImpl.kt:372`), so it shows a retry button;
+- reconcile the outbox (`outboxFate`, `ClipRepositoryImpl.kt:391`): keep files of
   `SENDING`/`FAILED` rows, promote files of sent rows into the cache, drop files with no row or a
   deleted row.
 
@@ -205,7 +205,7 @@ state and the clip the player actually holds, so tapping B while A plays switche
 tap while loading is ignored.
 
 `play` (`:253`) refuses during a call, unloads the previous clip, shows a loading state and asks
-`clipRepository.ensureLocal(id)` (`ClipRepositoryImpl.kt:112`) for a file: the outbox copy, then
+`clipRepository.ensureLocal(id)` (`ClipRepositoryImpl.kt:118`) for a file: the outbox copy, then
 the cache copy, else a download. Downloads go through `InFlight`, so concurrent requests for the
 same clip share one download; the file is decrypted with `fileKey` and moved into place
 atomically. If no file comes back the state records `failedMessageId` and the bubble shows a
@@ -221,19 +221,19 @@ was playing. An in-app call pauses playback with no auto-resume.
 When a clip ends (`onCompleted`, `:319`) it is marked played (clears the unplayed dot), and - for
 voice only (`shouldAutoAdvance`, `:88`) - the next voice clip in the same chat by timestamp then
 id is played, from any sender, including your own and already-played clips, and including clips
-that arrived while listening (`nextVoiceClipAfter`, `ClipRepositoryImpl.kt:370`). Otherwise
+that arrived while listening (`nextVoiceClipAfter`, `ClipRepositoryImpl.kt:376`, `:383`). Otherwise
 playback stops.
 
 `VoiceBubble` (`presentation/screens/chat/VoiceBubble.kt`) shows the waveform with seek, duration,
-an unplayed dot, a reply quote, and one action button chosen by `voiceButton(...)` (`:60`):
+an unplayed dot, a reply quote, and one action button chosen by `voiceButton(...)` (`:63`):
 cancel-send with a progress ring while uploading, a ring while downloading, retry-send for your own
 `FAILED` clip, a spinner while loading, retry-play after a failure, else pause/play. Dragging the
 waveform to seek no longer also starts swipe-to-reply: `SwipeToReply` does not claim a gesture a
-child already consumed (`presentation/components/chat/ChatSwipeGestures.kt:103`).
+child already consumed (`presentation/components/chat/ChatSwipeGestures.kt:105`).
 
 `ClipMiniPlayer` sits at the navigation root, so playback continues across tabs. It has
 play/pause, close, the speed cycle 1x -> 1.5x -> 2x (`nextClipSpeed`,
-`ClipMiniPlayer.kt:51`), a "Voice message" or "Video message" label from
+`ClipMiniPlayer.kt:53`), a "Voice message" or "Video message" label from
 `ClipPlaybackState.isVideo`, and a tap that opens the clip's chat
 (`ClipPlayerViewModel.resolveTarget`).
 
@@ -242,7 +242,7 @@ play/pause, close, the speed cycle 1x -> 1.5x -> 2x (`nextClipSpeed`,
 Deleting a voice clip for everyone also removes its Storage file
 (`DeleteMessageUseCase` -> `clipRepository.deleteRemoteFile`). Every device watches
 `observeDeletedClipIds` and purges its local copy, outbox file, send job and transfer
-(`purgeLocal`, `ClipRepositoryImpl.kt:184`); the playback controller stops if its current clip was
+(`purgeLocal`, `ClipRepositoryImpl.kt:189`); the playback controller stops if its current clip was
 deleted. Logout stops playback, cancels any voice or video recording, clears drafts, and wipes the
 outbox, drafts and media cache (see [[Authentication]]).
 
@@ -251,7 +251,7 @@ outbox, drafts and media cache (see [[Authentication]]).
 Tapping the mic without `RECORD_AUDIO` (or, in video mode, `CAMERA` + `RECORD_AUDIO`) shows a
 rationale dialog when Android allows it, otherwise requests the missing permissions. A one-off
 denial shows a toast; a permanent denial sets `micDenied`, and `MicPermissionDialog`
-(`ChatScreenWithNav.kt:295`) offers "Open settings" (`ACTION_APPLICATION_DETAILS_SETTINGS`), with
+(`ChatScreenWithNav.kt:296`) offers "Open settings" (`ACTION_APPLICATION_DETAILS_SETTINGS`), with
 camera wording when the request came from video mode.
 
 ## Labels, pushes and backend rules
@@ -265,6 +265,36 @@ camera wording when the request came from video mode.
 - `storage.rules`: `chatMedia/{conversationId}/{messageId}/{fileName}` - read, write and delete
   only for conversation participants (a cross-service `firestore.get` on the conversation), clip
   files up to 40 MB, other media up to 100 MB, `application/octet-stream` or image/video/audio.
+
+## Feature flag
+
+Voice messages, and the controls around them, are individually switchable through Remote Config
+(see [[Feature Flags and Remote Config]]). The flags are `voice_messages`, `recording_lock`,
+`clip_playback` with children `clip_seek` and `clip_mini_player`, and `clip_playback_speed` under
+`clip_mini_player`; the sibling `video_notes` is covered in [[Video Messages]]. Each is enforced in
+both the UI and the ViewModel:
+
+- `VOICE_MESSAGES`: `ChatViewModel.requiredFlag` maps `StartRecording` (and `ToggleClipMode` to the
+  new mode) to the flag of the current clip mode (`ChatViewModel.kt:240`, `:242`, `:248`-`:252`),
+  so a switched-off mode cannot start a recording even if a stale UI sends the intent. In the
+  composer `availableClipMode` (`MessageComposer.kt:386`) picks a mode whose flag is on and the
+  composer switches to it (`:259`-`:264`); when both voice and video notes are off the action
+  button has no record gesture at all (`:268`), and the tap-to-switch hint only works when both
+  are on (`:272`-`:276`).
+- `RECORDING_LOCK`: the slide-up lock is dropped from the gesture (`lockEnabled`,
+  `MessageComposer.kt:287`), the lock rail is not shown (`:328`), and `LockRecording` is refused in
+  the ViewModel (`ChatViewModel.kt:241`).
+- `CLIP_PLAYBACK`: `PlayClip` is refused unless that clip is already playing, so pausing always
+  works (`ChatViewModel.kt:243`); the bubble button is disabled when off (`VoiceBubble.kt:158`).
+- `CLIP_SEEK`: the waveform is not seekable when off (`VoiceBubble.kt:233`) and `SeekClip` is
+  refused (`ChatViewModel.kt:244`).
+- `CLIP_MINI_PLAYER`: the bar is not shown (`MainDisplay.kt:179`) and
+  `ClipPlayerViewModel.resume` refuses (`presentation/components/common/ClipPlayerViewModel.kt:37`).
+- `CLIP_PLAYBACK_SPEED`: the speed button is hidden (`ClipMiniPlayer.kt:127`) and
+  `ClipPlayerViewModel.setSpeed` refuses (`ClipPlayerViewModel.kt:44`).
+
+Sending and receiving are not blocked by these flags: an incoming clip is still stored and shown,
+it just may not be playable.
 
 ## Why this design
 
@@ -336,5 +366,6 @@ flowchart TD
 ## Related
 
 [[Video Messages]] - [[Chat and Messaging]] - [[End-to-End Encryption]] - [[Data Layer]] -
+[[Feature Flags and Remote Config]] -
 [[Async and Reactivity]] - [[Notifications]] - [[Authentication]] - [[Voice Messages - Code]] -
 [[Voice Messages - Explained Simply]] - [[Voice Messages - Basic Example]]

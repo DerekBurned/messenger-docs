@@ -46,8 +46,8 @@ fun observePresence(uid: String): Flow<String> = callbackFlow {
   (`observeMultiplePresence`, `:30`) for the conversations list.
 - `PresenceManager` (`data/presence/PresenceManager.kt:16`) adds a `Channel.CONFLATED` so a burst
   of foreground/background flips collapses to the latest state before it is written.
-- Typing reuses the same bridge under `typing/{conversationId}/{uid}`, with a 500ms debounce out
-  and a current-user filter in - see [[Presence and Typing]].
+- Typing reuses the same bridge under `typing/{conversationId}/{uid}`, with a 3s heartbeat while typing and a 2s idle
+  stop out, and a current-user and staleness filter in - see [[Presence and Typing]].
 
 ## Related
 

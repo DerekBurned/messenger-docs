@@ -16,14 +16,17 @@ interface UiIntent
 interface UiEffect
 ```
 
-- State - an immutable snapshot the UI renders. One `data class` per screen in
-  `presentation/state/` (for example `ChatUiState`, `presentation/state/chat/ChatUiState.kt:16`),
+- State - an immutable snapshot the UI renders. One `data class` per screen, kept in
+  that screen's own package (for example `ChatUiState`, `presentation/screens/chat/ChatUiState.kt:16`),
   annotated `@Immutable` so Compose can skip recomposition when the reference is unchanged.
-- Intent - a user action the UI sends down. A sealed interface per screen in
-  `presentation/intent/` (for example `ChatIntent`, `presentation/intent/ChatIntent.kt:8`).
+- Intent - a user action the UI sends down. A sealed interface per screen,
+  next to its state (for example `ChatIntent`, `presentation/screens/chat/ChatIntent.kt:8`).
 - Effect - a one-shot side effect the ViewModel sends up (show error, navigation trigger).
-  A sealed interface per screen in `presentation/effect/` (for example `ChatEffect`,
-  `presentation/effect/ChatEffect.kt:6`).
+  A sealed interface per screen, in the same package (for example `ChatEffect`,
+  `presentation/screens/chat/ChatEffect.kt:6`). Since the file-layout refactor the old
+  `presentation/state/`, `intent/`, `effect/` and `viewmodel/` folders no longer exist; each
+  screen's state, intent, effect, ViewModel and composables sit together under
+  `presentation/screens/<screen>/`.
 
 State is what things ARE; Effect is what just HAPPENED. The distinction matters for
 correctness: state is conflated and replayed to new collectors, effects must fire exactly
@@ -84,21 +87,25 @@ that call ViewModel methods directly rather than routing every action through a 
 The codebase does not force one pattern. Both are present and both are legitimate:
 
 1. Intent-routed MVI (extends `MviViewModel`). Examples: `ChatViewModel`
-   (`presentation/viewmodel/ChatViewModel.kt:64`), `AuthViewModel`
-   (`presentation/viewmodel/AuthViewModel.kt:34`), `ChangePhoneViewModel`,
+   (`presentation/screens/chat/ChatViewModel.kt:63`), `AuthViewModel`
+   (`presentation/screens/auth/AuthViewModel.kt:37`), `ChangePhoneViewModel`,
    `DeleteAccountViewModel`, `EditProfileViewModel`. The UI only ever calls `dispatch(intent)`;
    `handleIntent` is a single `when` over the sealed intent
-   (`presentation/viewmodel/ChatViewModel.kt:190`).
+   (`presentation/screens/chat/ChatViewModel.kt:190`). Its first two lines ask `requiredFlag(intent)`
+   which feature flag the intent needs and return early when `featureFlags.refuses(flag)` - the
+   kill-switch is enforced here, below the UI (see [[Feature Flags and Remote Config]]).
 2. Method-and-StateFlow (extends plain `ViewModel` / `AndroidViewModel`). Example:
-   `ChatsViewModel` (`presentation/viewmodel/ChatsViewModel.kt:35`) exposes a
+   `ChatsViewModel` (`presentation/screens/chats/ChatsViewModel.kt:37`) exposes a
    `MutableStateFlow(...).asStateFlow()` plus public methods (`deleteConversation`,
    `createConversation`, `refresh`). `CallViewModel`
-   (`presentation/viewmodel/CallViewModel.kt:38`) does the same and additionally uses a
+   (`presentation/screens/call/CallViewModel.kt:40`) does the same and additionally uses a
    `Channel<CallExit>` exposed as `receiveAsFlow()` for one-shot navigation events instead of
-   a `SharedFlow` of effects. `ClipPlayerViewModel` (`presentation/viewmodel/ClipPlayerViewModel.kt`),
+   a `SharedFlow` of effects. `ClipPlayerViewModel` (`presentation/components/common/ClipPlayerViewModel.kt`),
    behind the cross-tab voice mini player, is the thinnest case: its `state` is the app-wide
    `ClipPlaybackController.state` passed straight through, and its methods forward to the
-   controller (see [[Voice Messages]]).
+   controller (see [[Voice Messages]]). The newer profile, appearance, media-picker and
+   chat-profile ViewModels (for example `AppearanceViewModel`, `ChatUserProfileViewModel`) are also
+   this second style; each public method begins with a `featureFlags.refuses(...)` guard.
 
 The trade-off: style 1 gives a single, testable entry point and an exhaustive action list;
 style 2 is lighter for screens with few actions or where a `Channel` maps more naturally to
@@ -109,7 +116,7 @@ same either way.
 
 State is collected with `collectAsStateWithLifecycle`, which only collects while the lifecycle
 is at least STARTED, so a backgrounded screen stops doing recomposition work. Real call site
-in navigation (`presentation/navigation/graph/AppNavigation.kt:27`):
+in navigation (`presentation/navigation/graph/AppNavigation.kt:31`):
 
 ```kotlin
 val authViewModel: AuthViewModel = hiltViewModel()
@@ -138,12 +145,12 @@ The goal is "run this handler once per emitted event, only while visible, on the
 foreground and cancels it when it leaves, which prevents a backgrounded screen from
 navigating or toasting. `Dispatchers.Main.immediate` avoids an unnecessary re-dispatch when
 already on main, so an effect that triggers navigation runs synchronously in the same frame.
-`ChatScreenWithNav` uses this helper (`presentation/screens/chat/ChatScreenWithNav.kt:83`).
+`ChatScreenWithNav` uses this helper (`presentation/screens/chat/ChatScreenWithNav.kt:81`).
 
 ## Reducing state: the `setState { copy(...) }` pattern
 
 Every state mutation goes through the reducer. From `ChatViewModel`
-(`presentation/viewmodel/ChatViewModel.kt:490`):
+(`presentation/screens/chat/ChatViewModel.kt:519`):
 
 ```kotlin
 setState {
@@ -157,7 +164,7 @@ setState {
 Because `ChatUiState` is an immutable `data class`, `copy` produces a new instance; `StateFlow`
 compares by equality and only emits when something actually changed, so identical updates do
 not cause recomposition. Reads inside the ViewModel use `currentState`
-(`presentation/viewmodel/ChatViewModel.kt:229`) for the latest snapshot without collecting.
+(`presentation/screens/chat/ChatViewModel.kt:240`) for the latest snapshot without collecting.
 
 ## UiText: error/message strings that survive to compose time
 
@@ -172,7 +179,7 @@ throughout the ViewModels.
 ## Process death and `SavedStateHandle`
 
 Screen-scoped ViewModels read their navigation arguments from `SavedStateHandle`, which is
-restored across process death. `ChatViewModel` (`presentation/viewmodel/ChatViewModel.kt:87`):
+restored across process death. `ChatViewModel` (`presentation/screens/chat/ChatViewModel.kt:87`):
 
 ```kotlin
 val conversationId: String = savedStateHandle.get<String>("conversationId") ?: ""
@@ -189,10 +196,11 @@ function of state. The root obtains the ViewModel with `hiltViewModel()`, collec
 `collectAsStateWithLifecycle`, wires `ObserveAsEvents` for effects, and passes `state` plus
 `onIntent`/callbacks into a stateless screen composable. The chat screen follows this across
 files in `presentation/screens/chat/`: `ChatScreenWithNav` obtains the ViewModel
-(`ChatScreenWithNav.kt:70`), collects state (`:78`) and effects (`:83`), and hands state plus
-`ChatIntent` callbacks to `ChatScreenContent`, which renders `ChatUiState`; `ChatScreenPreview`
-renders the same content with fake state. Other screens use the same `Screen` / `ScreenContent`
-/ `ScreenPreview` file split (auth, settings, delete account). Keeping the
+(`ChatScreenWithNav.kt:68`), collects state (`:76`) and effects (`:81`), and hands state plus
+`ChatIntent` callbacks to `ChatScreenContent`, which renders `ChatUiState`. The chat package has no
+`@Preview` of its own at 0.2.2.4 (the earlier `ChatScreenPreview` file is gone); other screens use the
+same `Screen` / `ScreenContent` split and keep their `@Preview` functions in the `ScreenContent`
+file (for example auth, settings, delete account, profile). Keeping the
 stateless screen a pure function of `UiState` is what makes `@Preview` and UI tests possible
 without a live ViewModel.
 

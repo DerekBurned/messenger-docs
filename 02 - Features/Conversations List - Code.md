@@ -3,9 +3,10 @@
 Companion to [[Conversations List]]. The actual source for the conversations list, block by
 block. Snippets are copied from the repo; long expressions are sometimes joined onto one line.
 
-Files covered:
-- `presentation/state/ConversationsUiState.kt`
-- `presentation/viewmodel/ChatsViewModel.kt` (formerly `ConversationsViewModel.kt`)
+Files covered (the `featureFlags.refuses(...)` guards in the actions below are the ViewModel half of the
+flag gating, see [[Conversations List]]):
+- `presentation/screens/chats/ConversationsUiState.kt`
+- `presentation/screens/chats/ChatsViewModel.kt` (formerly named ConversationsViewModel)
 - Use cases in `domain/usecase/conversation/`
 - `data/repository/ConversationRepositoryImpl.kt`
 - `data/remote/firebase/FirestoreService.kt` (conversation methods; see [[Chat and Messaging - Code]]
@@ -40,7 +41,7 @@ itself.
 
 ## 2. ChatsViewModel
 
-`presentation/viewmodel/ChatsViewModel.kt` - the method-and-StateFlow style (plain `ViewModel`,
+`presentation/screens/chats/ChatsViewModel.kt` - the method-and-StateFlow style (plain `ViewModel`,
 no MVI base). `deleteConversation` / `createConversation` expand their `fold` over several lines
 in the source:
 
@@ -58,7 +59,8 @@ class ChatsViewModel @Inject constructor(
     private val observeUserPresenceUseCase: ObserveUserPresenceUseCase,
     private val observeAuthStateUseCase: ObserveAuthStateUseCase,
     private val userRepository: IUserRepository,
-    private val firebaseAuth: FirebaseAuth
+    private val firebaseAuth: FirebaseAuth,
+    private val featureFlags: FeatureFlags,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -167,6 +169,7 @@ class ChatsViewModel @Inject constructor(
     }
 
     fun deleteForMe(conversationId: String) {
+        if (featureFlags.refuses(FeatureFlag.CHAT_LIST_DELETE)) return
         viewModelScope.launch {
             clearConversationForMeUseCase(conversationId)
                 .onFailure { e -> _uiState.update { it.copy(error = e.message?.toUiText()) } }
@@ -174,6 +177,7 @@ class ChatsViewModel @Inject constructor(
     }
 
     fun deleteForEveryone(conversationId: String) {
+        if (featureFlags.refuses(FeatureFlag.CHAT_LIST_DELETE_FOR_EVERYONE)) return
         viewModelScope.launch {
             deleteConversationForEveryoneUseCase(conversationId)
                 .onFailure { e -> _uiState.update { it.copy(error = e.message?.toUiText()) } }
@@ -181,6 +185,7 @@ class ChatsViewModel @Inject constructor(
     }
 
     fun markAsRead(conversationId: String) {
+        if (featureFlags.refuses(FeatureFlag.CHAT_LIST_MARK_READ)) return
         viewModelScope.launch {
             markConversationAsReadUseCase(conversationId)
                 .onFailure { e -> _uiState.update { it.copy(error = e.message?.toUiText()) } }
@@ -188,6 +193,7 @@ class ChatsViewModel @Inject constructor(
     }
 
     fun markAsUnread(conversationId: String) {
+        if (featureFlags.refuses(FeatureFlag.CHAT_LIST_MARK_READ)) return
         viewModelScope.launch {
             markConversationAsUnreadUseCase(conversationId)
                 .onFailure { e -> _uiState.update { it.copy(error = e.message?.toUiText()) } }
@@ -204,6 +210,13 @@ class ChatsViewModel @Inject constructor(
     }
 
     fun refresh() {
+        if (featureFlags.refuses(FeatureFlag.CHAT_LIST_PULL_REFRESH)) return
+        sync()
+    }
+
+    fun retry() = sync()
+
+    private fun sync() {
         viewModelScope.launch {
             _uiState.update { it.copy(isRefreshing = true) }
             syncConversationsUseCase()

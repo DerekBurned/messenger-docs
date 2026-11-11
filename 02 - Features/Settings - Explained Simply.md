@@ -21,7 +21,7 @@ you change the note, the app redecorates. The note is still there tomorrow.
 ## Step by step: switching to dark mode
 
 1. On the Appearance screen you flip the dark switch -> `AppearanceViewModel.setDarkTheme(true)`
-   (`presentation/viewmodel/AppearanceViewModel.kt:51`).
+   (`presentation/screens/settings/appearance/AppearanceViewModel.kt:51`).
 
 2. That writes `DARK` to the sticky note: `ThemePreferenceStore.setThemeMode(DARK)`
    (`data/local/prefs/ThemePreferenceStore.kt:79`).
@@ -53,7 +53,7 @@ suspend fun setThemeMode(mode: ThemeMode) {
 ```
 
 Giving the screen a value ready on the first frame
-(`presentation/viewmodel/AppearanceViewModel.kt:30`):
+(`presentation/screens/settings/appearance/AppearanceViewModel.kt:30`):
 
 ```kotlin
 val themeMode: StateFlow<ThemeMode> = themePreferenceStore.themeMode

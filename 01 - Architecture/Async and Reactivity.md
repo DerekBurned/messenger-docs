@@ -1,7 +1,7 @@
 # Async and Reactivity
 
 Every asynchronous primitive in the app, with the property that forced the choice and a real
-call site. Coroutines version is `1.11.0` (`gradle/libs.versions.toml:28`).
+call site. Coroutines version is `1.11.0` (`gradle/libs.versions.toml:29`).
 
 ## Flow (cold) - a stream that does work per collector
 
@@ -81,7 +81,7 @@ screen may collect more than once (`getMessagesStream`, the recents lists, delet
 
 ### Firestore snapshot listener - `FirestoreService.getRecentMessagesStream`
 
-`data/remote/firebase/FirestoreService.kt:251`. A `callbackFlow` wraps
+`data/remote/firebase/FirestoreService.kt:229`. A `callbackFlow` wraps
 `addSnapshotListener(MetadataChanges.INCLUDE)`:
 
 ```kotlin
@@ -103,9 +103,9 @@ and `doc.metadata.hasPendingWrites()` tags each row as "pending" so optimistic s
 before the server confirms them. `close(error)` propagates a listen failure as a Flow
 exception; `awaitClose { listener.remove() }` detaches the Firestore listener when collection
 ends. The raw DTO flow is then `map`-ped through the E2EE codec
-(`data/remote/firebase/FirestoreService.kt:281`) - see [[End-to-End Encryption]].
+(`data/remote/firebase/FirestoreService.kt:259`) - see [[End-to-End Encryption]].
 
-`getAllConversations` (`data/remote/firebase/FirestoreService.kt:493`) uses the same shape and
+`getAllConversations` (`data/remote/firebase/FirestoreService.kt:504`) uses the same shape and
 additionally surfaces removed document ids and `snapshot.metadata.isFromCache` in a
 `ConversationSync` value.
 
@@ -141,13 +141,13 @@ latest immediately.
   would leave the screen blank until the first emission. See [[Presentation Layer (MVI)]].
 - Global call state - `ActiveCallHolder` (`data/remote/call/ActiveCallHolder.kt:37`) is an
   `object` with a `MutableStateFlow<ActiveCall?>`. The call foreground service is the single
-  writer; the UI (`presentation/navigation/graph/MainDisplay.kt:147`, `ActiveCallBar`,
+  writer; the UI (`presentation/navigation/graph/MainDisplay.kt:152`, `ActiveCallBar`,
   `CallViewModel`) is a reader. A `StateFlow` fits because "the current call" is state with a
   defined current value (possibly `null`), read from many places. See
   [[Calls (Voice and Video)]].
 - Call bar presentation mode - `CallBarPresenter.mode`
   (`presentation/components/call/CallBarPresenter.kt:11`) is a `MutableStateFlow<CallBarMode>`
-  (BAR / HIDDEN / BUBBLE).
+  (BAR / HIDDEN / BUBBLE / VIDEO).
 - Media transfer progress - `MediaTransferManager.transfers` re-exposed as
   `IMediaRepository.transfers: StateFlow<Map<String, MediaTransfer>>`
   (`data/repository/MediaRepositoryImpl.kt:60`).
@@ -155,9 +155,14 @@ latest immediately.
   `ClipPlaybackController.state` (`data/media/ClipPlaybackController.kt:111`) are app-wide
   singletons, so the chat composer, the voice bubbles and the mini player across tabs all read
   one current value. See [[Voice Messages]].
+- Feature flags - `RemoteConfigFeatureFlags.state` (`data/remote/firebase/RemoteConfigFeatureFlags.kt:34`)
+  is a `StateFlow<FeatureFlagState>` that `publish()` (`:79`) reassigns after each Remote Config
+  fetch or activation. A `StateFlow` fits because every reader (the Compose tree through
+  `LocalFeatureFlags`, ViewModels through `isEnabled`) needs a current value immediately, before
+  any network answer. See [[Feature Flags and Remote Config]].
 
 `_state.update { }` (`presentation/base/mvi/MviViewModel.kt:36`; `ChatsViewModel` does the same
-on its `_uiState`, `presentation/viewmodel/ChatsViewModel.kt:67`) is the atomic compare-and-set
+on its `_uiState`, `presentation/screens/chats/ChatsViewModel.kt:70`) is the atomic compare-and-set
 update that makes concurrent reducers safe.
 
 ## SharedFlow vs Channel for one-shot events
@@ -168,7 +173,7 @@ Two mechanisms for "events, not state", chosen per site:
   effects (`presentation/base/mvi/MviViewModel.kt:22`). Zero replay so a rotated screen does not
   re-fire the effect; buffered + non-suspending emit so `emitEffect` never blocks.
 - `Channel(Channel.BUFFERED).receiveAsFlow()` for the call-screen exit signal in `CallViewModel`
-  (`presentation/viewmodel/CallViewModel.kt:51`). A `Channel` is single-consumer with
+  (`presentation/screens/call/CallViewModel.kt:54`). A `Channel` is single-consumer with
   guaranteed delivery, which matches "navigate away exactly once".
 - `Channel(Channel.CONFLATED)` for presence transitions in `PresenceManager`
   (`data/presence/PresenceManager.kt:24`). CONFLATED keeps only the latest requested state, so
@@ -182,39 +187,44 @@ Two mechanisms for "events, not state", chosen per site:
   wraps a collect in a `flow { }.flowOn(Dispatchers.IO)` (IO here because it drives a network
   snapshot stream and writes rows).
 - `combine` to merge streams: `ChatViewModel.observePartnerPresence`
-  (`presentation/viewmodel/ChatViewModel.kt:455`) combines the presence flow with a 60s
+  (`presentation/screens/chat/ChatViewModel.kt:485`) combines the presence flow with a 60s
   `tickerFlow` so the "last seen N minutes ago" label refreshes on a timer even when presence
   itself has not changed; `FirebasePresenceService.observeMultiplePresence`
-  (`data/service/FirebasePresenceService.kt:30`) combines a list of per-user presence flows
+  (`data/presence/FirebasePresenceService.kt:30`) combines a list of per-user presence flows
   into a single `Map`.
 - `onEach { }.launchIn(scope)` for fire-and-forget collection into state:
-  `ChatViewModel.observePartnerAlias` (`presentation/viewmodel/ChatViewModel.kt:151`) and
-  `observeTransfers` (`presentation/viewmodel/ChatViewModel.kt:479`).
+  `ChatViewModel.observePartnerAlias` (`presentation/screens/chat/ChatViewModel.kt:151`) and
+  `observeTransfers` (`presentation/screens/chat/ChatViewModel.kt:509`).
 - `collectLatest` where a new emission should cancel work started for the previous one:
   `CallForegroundService.observeRemoteStatus`
-  (`data/remote/call/CallForegroundService.kt:352`), `CallViewModel.observeActiveCall`
-  (`presentation/viewmodel/CallViewModel.kt:103`), `SyncCoordinator`
+  (`data/remote/call/CallForegroundService.kt:359`), `CallViewModel.observeActiveCall`
+  (`presentation/screens/call/CallViewModel.kt:106`), `SyncCoordinator`
   (`data/sync/SyncCoordinator.kt:40`).
 - `onStart` / `catch` to bracket a stream with a loading state and error handling:
   `ChatsViewModel.loadConversations`
-  (`presentation/viewmodel/ChatsViewModel.kt:81`), `GetMessagesUseCase`
-  (`domain/usecase/message/GetMessageUseCase.kt:16`).
+  (`presentation/screens/chats/ChatsViewModel.kt:84`), `GetMessagesUseCase`
+  (`domain/usecase/message/GetMessagesUseCase.kt:16`).
 - `withTimeoutOrNull` to bound a wait: `MediaRepositoryImpl.uploadAndSend`
   (`data/repository/MediaRepositoryImpl.kt:180`) caps a multi-file upload at 35s;
-  `ChatViewModel.jumpToMessage` (`presentation/viewmodel/ChatViewModel.kt:357`) bounds each
+  `ChatViewModel.jumpToMessage` (`presentation/screens/chat/ChatViewModel.kt:387`) bounds each
   page load while searching backward. Voice clips scale the wait with the file instead:
-  `clipUploadTimeout` (`data/repository/ClipRepositoryImpl.kt:389`) is 30s plus one second per
+  `clipUploadTimeout` (`data/repository/ClipRepositoryImpl.kt:401`) is 30s plus one second per
   8000 bytes, and the follow-up Firestore write is confirmed with
   `FirestoreService.sendMessage(..., confirmWithin = 20.seconds)`, which wraps `write.await()` in
-  `withTimeoutOrNull` (`data/remote/firebase/FirestoreService.kt:152`).
+  `withTimeoutOrNull` (`data/remote/firebase/FirestoreService.kt:130`).
+- `RemoteConfigFeatureFlags.awaitFresh` (`data/remote/firebase/RemoteConfigFeatureFlags.kt:60`) puts
+  two `withTimeoutOrNull` bounds (1 s for initialisation, 1.5 s for fetch + activate) around Firebase
+  `Task`s turned into suspend calls with `await()`, so the incoming-call and notification paths wait
+  for a fresh flag value but never longer than a moment. `IncomingCallGate.admit`
+  (`data/remote/call/IncomingCallGate.kt:22`) adds a 3 s bound on declining a refused call.
 - A shared `Deferred` per key to deduplicate concurrent work: `InFlight`
-  (`data/repository/ClipRepositoryImpl.kt:392`) keeps one `async(start = CoroutineStart.LAZY)`
+  (`data/repository/ClipRepositoryImpl.kt:404`) keeps one `async(start = CoroutineStart.LAZY)`
   per message id, so two bubbles asking for the same clip download it once and both await the
   same result. The entry removes itself in `invokeOnCompletion`, so a failure is not cached.
 - A `CompletableDeferred` to turn a listener callback into one awaited result:
   `VideoNoteRecorder.Session.result` (`data/media/VideoNoteRecorder.kt:109`) is completed exactly
   once by CameraX's asynchronous `VideoRecordEvent.Finalize`. `stop` awaits it under
-  `withTimeoutOrNull(5_000)` in a `try`/`finally` (`:183`): if the waiting coroutine is cancelled
+  `withTimeoutOrNull(5_000)` in a `try`/`finally` (`:187`): if the waiting coroutine is cancelled
   (the ViewModel was cleared) or the timeout fires, the `finally` keeps the clip as a draft
   instead of dropping it. See [[Video Messages]].
 - `withContext(NonCancellable)` to protect shared state from cancellation:
@@ -228,7 +238,7 @@ Two mechanisms for "events, not state", chosen per site:
 - `viewModelScope` - all ViewModel work (`ChatViewModel`, `ChatsViewModel`,
   `AuthViewModel`, `CallViewModel`). Cancelled automatically in `onCleared`, so nothing
   outlives the screen. Manual `Job` handles (for example `typingHeartbeatJob` /
-  `typingStopJob`, `presentation/viewmodel/ChatViewModel.kt:93`) are cancelled explicitly to
+  `typingStopJob`, `presentation/screens/chat/ChatViewModel.kt:94`) are cancelled explicitly to
   debounce.
 - A `@Singleton` owning its own `CoroutineScope(SupervisorJob() + Dispatchers.IO)` - used where
   work must outlive any single screen. `MediaRepositoryImpl`
@@ -248,7 +258,7 @@ Two mechanisms for "events, not state", chosen per site:
   uses the same scope for the same reason; CameraX events are delivered on the main executor
   (`ContextCompat.getMainExecutor`), so every session transition happens on one thread.
 - `CoroutineScope(SupervisorJob() + Dispatchers.IO)` inside a `Service` - `CallForegroundService`
-  (`data/remote/call/CallForegroundService.kt:57`) runs its call state machine (signaling
+  (`data/remote/call/CallForegroundService.kt:58`) runs its call state machine (signaling
   writes, ringtones, timeouts) on this scope and cancels it in `onDestroy`
   (`data/remote/call/CallForegroundService.kt:941`) via `scope.coroutineContext[Job]?.cancel()`,
   so no timeout job survives the service. See [[Calls (Voice and Video)]].
@@ -256,7 +266,7 @@ Two mechanisms for "events, not state", chosen per site:
   (`data/sync/SyncCoordinator.kt:23`) watches the network flow on `Default` and triggers
   WorkManager; light coordination, not blocking IO, hence `Default`.
 - Ephemeral `CoroutineScope(Dispatchers.IO)` per callback - `MyFirebaseMessagingService`
-  (`data/remote/firebase/MyFirebaseMessagingService.kt:47`, `:92`). An FCM callback has no
+  (`data/remote/firebase/MyFirebaseMessagingService.kt:54`, `:99`). An FCM callback has no
   ViewModel or long-lived scope handy, so each message spins a short-lived IO scope to persist
   and notify. See [[Notifications]].
 
@@ -264,4 +274,4 @@ Two mechanisms for "events, not state", chosen per site:
 
 [[Presentation Layer (MVI)]] - [[Data Layer]] - [[Calls (Voice and Video)]] -
 [[Presence and Typing]] - [[End-to-End Encryption]] - [[Architecture Overview]] -
-[[Voice Messages]] - [[Video Messages]]
+[[Voice Messages]] - [[Video Messages]] - [[Feature Flags and Remote Config]]

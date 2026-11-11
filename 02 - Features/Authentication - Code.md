@@ -6,9 +6,9 @@ here the focus is the code itself. Snippets are copied from the repo with `Log.d
 lines trimmed.
 
 Files covered:
-- MVI contract: `presentation/state/AuthUiState.kt`, `presentation/intent/AuthIntent.kt`,
-  `presentation/effect/AuthEffect.kt`
-- `presentation/viewmodel/AuthViewModel.kt`
+- MVI contract: `presentation/screens/auth/AuthUiState.kt`, `presentation/screens/auth/AuthIntent.kt`,
+  `presentation/screens/auth/AuthEffect.kt`
+- `presentation/screens/auth/AuthViewModel.kt`
 - Use cases: `domain/usecase/auth/{LoginWithPhoneNumberUseCase, LinkPhoneUseCase, LogoutUseCase,
   ObserveAuthStateUseCase, ObserveSessionStateUseCase, GetCurrentUserUseCase}.kt`
 - `data/repository/AuthRepositoryImpl.kt`
@@ -19,7 +19,7 @@ Files covered:
 
 ## 1. MVI contract
 
-`presentation/state/AuthUiState.kt` - the entire screen state:
+`presentation/screens/auth/AuthUiState.kt` - the entire screen state:
 
 ```kotlin
 data class AuthUiState(
@@ -29,18 +29,32 @@ data class AuthUiState(
     val session: SessionState = SessionState.SignedOut(),
     val codeSent: Boolean = false,
     val verificationId: String? = null,
+    val mode: AuthMode = AuthMode.REGISTER,
+    val country: Country = Countries.default,
+    val nationalNumber: String = "",
+    val phoneValid: Boolean = false,
+    val username: String = "",
+    val otp: String = "",
 ) : UiState
 ```
 
-Six fields carry the whole flow: `isLoading` (spinner), `codeSent` (switches the UI from the
+The first six fields carry the SMS flow: `isLoading` (spinner), `codeSent` (switches the UI from the
 phone field to the OTP field), `verificationId` (the id of this flow's SMS session, passed back
 to `verifyCode` and `resendVerificationCode`), `session` (the top-level nav switch, see
-[[Navigation]]), `error` as a `UiText`, and `currentUser` after success.
+[[Navigation]]), `error` as a `UiText`, and `currentUser` after success. Since PR #39 the form itself
+(`mode`, `country`, `nationalNumber`, `phoneValid`, `username`, `otp`) also lives here, so it survives
+recomposition and, through `SavedStateHandle`, process death.
 
-`presentation/intent/AuthIntent.kt` - every action the screen can send:
+`presentation/screens/auth/AuthIntent.kt` - every action the screen can send:
 
 ```kotlin
 sealed interface AuthIntent : UiIntent {
+    data class SelectMode(val mode: AuthMode) : AuthIntent
+    data class SelectCountry(val country: Country) : AuthIntent
+    data class ChangeNationalNumber(val input: String) : AuthIntent
+    data class ChangeUsername(val username: String) : AuthIntent
+    data class ChangeOtp(val otp: String) : AuthIntent
+
     data class SendVerificationCode(
         val activity: Activity,
         val phoneNumber: String,
@@ -66,7 +80,7 @@ SMS auto-retrieval (`PhoneAuthOptions.setActivity`); the screen obtains it with
 `LocalActivity.current`. `isRegister` distinguishes login from registration so the repository
 can enforce the "already registered / not registered" rules.
 
-`presentation/effect/AuthEffect.kt` - one-shot signals up to the UI:
+`presentation/screens/auth/AuthEffect.kt` - one-shot signals up to the UI:
 
 ```kotlin
 sealed interface AuthEffect : UiEffect {
@@ -79,7 +93,7 @@ sealed interface AuthEffect : UiEffect {
 
 ## 2. AuthViewModel
 
-`presentation/viewmodel/AuthViewModel.kt` (logging trimmed):
+`presentation/screens/auth/AuthViewModel.kt` (logging trimmed):
 
 ```kotlin
 @HiltViewModel
@@ -91,18 +105,23 @@ class AuthViewModel @Inject constructor(
     private val firebaseAuthService: FirebaseAuthService,
     private val presenceManager: PresenceManager,
     private val firebaseMessagingManager: FirebaseMessagingManager,
-    private val firestoreService: FirestoreService,
+    private val deviceRegistry: DeviceRegistry,
     private val syncCoordinator: SyncCoordinator,
     private val backfillRecentHistoryUseCase: BackfillRecentHistoryUseCase,
+    private val savedStateHandle: SavedStateHandle,
 ) : MviViewModel<AuthUiState, AuthIntent, AuthEffect>(
-    initialState = AuthUiState(
-        session = if (firebaseAuthService.isAuthenticated()) {
-            SessionState.Resolving
-        } else {
-            SessionState.SignedOut()
-        },
+    initialState = restoreForm(
+        savedStateHandle,
+        AuthUiState(
+            session = if (firebaseAuthService.isAuthenticated()) {
+                SessionState.Resolving
+            } else {
+                SessionState.SignedOut()
+            },
+        ),
     ),
 ) {
+    private val phoneRules = PhoneNumberRules()
     private var pendingUsername: String? = null
     private var pendingIsRegister: Boolean = false
 
@@ -112,6 +131,11 @@ class AuthViewModel @Inject constructor(
 
     override fun handleIntent(intent: AuthIntent) {
         when (intent) {
+            is AuthIntent.SelectMode -> { /* save mode in SavedStateHandle; setState(mode, error = null) */ }
+            is AuthIntent.SelectCountry -> updatePhone(intent.country, currentState.nationalNumber)
+            is AuthIntent.ChangeNationalNumber -> updatePhone(currentState.country, intent.input)
+            is AuthIntent.ChangeUsername -> { /* save + setState(username) */ }
+            is AuthIntent.ChangeOtp -> setState { copy(otp = intent.otp) }
             is AuthIntent.SendVerificationCode ->
                 sendVerificationCode(intent.activity, intent.phoneNumber, intent.username, intent.isRegister)
             is AuthIntent.ResendCode -> resendCode(intent.activity, intent.phoneNumber)
@@ -119,7 +143,7 @@ class AuthViewModel @Inject constructor(
             is AuthIntent.VerifyOtpAndLink -> verifyOtpAndLink(intent.otpCode)
             AuthIntent.Logout -> logout()
             AuthIntent.ClearError -> setState { copy(error = null) }
-            AuthIntent.EditPhoneNumber -> setState { copy(codeSent = false, error = null) }
+            AuthIntent.EditPhoneNumber -> setState { copy(codeSent = false, error = null, otp = "") }
         }
     }
 
@@ -218,8 +242,14 @@ class AuthViewModel @Inject constructor(
                 is Resource.Error -> {
                     setState { copy(isLoading = false, error = result.message.toUiText()) }
                 }
-                is Resource.Failure -> {
-                    setState { copy(isLoading = false, error = result.exception.message?.toUiText()) }
+                is Resource.Failure -> when (val exception = result.exception) {
+                    is AuthAccountException -> {
+                        // AlreadyRegistered -> message auth_error_number_registered, mode LOGIN
+                        // NotRegistered     -> message auth_error_number_not_registered, mode REGISTER
+                        // save the new mode, then back to step one:
+                        setState { copy(isLoading = false, codeSent = false, verificationId = null, otp = "", mode = mode, error = UiText.StringResource(message)) }
+                    }
+                    else -> setState { copy(isLoading = false, error = exception.message?.toUiText()) }
                 }
                 is Resource.Loading -> {}
             }
@@ -240,8 +270,11 @@ class AuthViewModel @Inject constructor(
 `firebaseAuthService.resendVerificationCode(phoneNumber, activity, currentState.verificationId)`
 and stores the new id on `CodeSent`; `verifyOtpAndLink` builds the credential the same way and
 hands it to `linkPhone`, which collects `LinkPhoneUseCase` and emits `AuthEffect.PhoneLinked`.
-`syncFcmTokenForCurrentUser` fetches the FCM token and writes it with
-`firestoreService.updateFcmToken(uid, token)`.
+`syncFcmTokenForCurrentUser` fetches the FCM token and registers it with
+`deviceRegistry.register(uid, token)` (a per-device row, see [[Notifications]]). `updatePhone` runs the
+input through `PhoneNumberRules` (`sanitize`, `isValid`) and mirrors country and number into
+`SavedStateHandle`; `restoreForm` rebuilds the form from it. The `AuthAccountException` branch of
+`signInWithPhone` (PR #53) is in `AuthViewModel.kt:284`-`:304` and is explained in [[Authentication]].
 
 Explanation of the moving parts:
 
@@ -355,7 +388,7 @@ class AuthRepositoryImpl @Inject constructor(
             if (existing != null) {
                 if (isRegistration) {
                     auth.logout()
-                    return Resource.Error("An account with this number already exists. Please log in instead.")
+                    return Resource.Failure(AuthAccountException.AlreadyRegistered())
                 }
                 if (existing.usernameLower.isNullOrBlank() && !existing.username.isNullOrBlank()) {
                     runCatching {
@@ -365,14 +398,17 @@ class AuthRepositoryImpl @Inject constructor(
                         )
                     }
                 }
-                e2eeBootstrap.publishKeys()
+                e2eeBootstrap.refresh()
                 return Resource.Success(existing)
             }
 
             if (!isRegistration) {
                 auth.deleteAccount()
-                    .onFailure { Log.e(TAG, "loginWithPhone: failed to delete orphan auth user", it) }
-                return Resource.Error("User does not exist. Please register first.")
+                    .onFailure {
+                        Log.e(TAG, "loginWithPhone: failed to delete orphan auth user", it)
+                        auth.logout()
+                    }
+                return Resource.Failure(AuthAccountException.NotRegistered())
             }
 
             val resolvedUsername = username?.trim()?.takeIf { it.isNotBlank() }
@@ -389,7 +425,7 @@ class AuthRepositoryImpl @Inject constructor(
                 fcmToken = null,
             ).also {
                 firestore.createUserProfile(it).getOrThrow()
-                e2eeBootstrap.publishKeys()
+                e2eeBootstrap.refresh()
             }
             Resource.Success(user)
         } catch (e: Exception) {
@@ -411,15 +447,18 @@ The important logic:
 - Firebase phone sign-in always succeeds first (it just proves phone ownership); the
   registration/login decision is then made against the Firestore profile:
   - profile marked `deleted` -> reject and sign back out;
-  - profile exists + `isRegistration` -> reject ("already exists"), and sign back out so no
-    half-logged-in state remains;
+  - profile exists + `isRegistration` -> `Resource.Failure(AuthAccountException.AlreadyRegistered())`
+    and sign back out so no half-logged-in state remains (the ViewModel turns it into a message and
+    switches to login mode);
   - profile exists + login -> success, plus a one-time backfill of `usernameLower` (used for
     prefix search) for older profiles;
-  - no profile + login -> reject and `deleteAccount()` the just-created orphan Firebase auth
-    user so it does not linger;
+  - no profile + login -> `Resource.Failure(AuthAccountException.NotRegistered())` and
+    `deleteAccount()` the just-created orphan Firebase auth user so it does not linger (signing out
+    if that delete fails);
   - no profile + `isRegistration` -> create the Firestore profile.
-- `e2eeBootstrap.publishKeys()` runs on every successful sign-in path, so the device's public
-  E2EE key is published as soon as the user is in. See [[End-to-End Encryption]].
+- `e2eeBootstrap.refresh()` runs on every successful sign-in path, which makes `E2eeBootstrap` resolve
+  the account's key state (create and publish a key for a new account, or wait for a recovery code on
+  an account that already has keys). See [[End-to-End Encryption]].
 - `deleteAccount` delegates to `AccountDeletionService`; see [[Settings]].
 
 ---
@@ -539,8 +578,7 @@ and account-management flows in [[Settings]].
 
 ## 6. UI (not embedded)
 
-The Compose UI is `presentation/screens/auth/` (`AuthScreen.kt`, `AuthScreenContent.kt`,
-`AuthScreenPreviews.kt`) plus `presentation/components/auth/` (`AuthComponents.kt`,
+The Compose UI is `presentation/screens/auth/` (`AuthScreen.kt`, `AuthScreenContent.kt`) plus `presentation/components/auth/` (`AuthComponents.kt`,
 `AuthModeToggle.kt` for the login/register switch, `CountryCodePicker.kt` + `model/Countries.kt`
 for the dialling-code picker, `ChangePhoneComponents.kt`). `AuthScreen` resolves the Activity with
 `LocalActivity.current`, collects `AuthViewModel.state` with `collectAsStateWithLifecycle`,

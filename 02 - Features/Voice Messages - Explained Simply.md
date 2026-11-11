@@ -80,7 +80,7 @@ sequenceDiagram
 ## The code, with plain-English comments
 
 How the end of the finger gesture is judged
-(`presentation/components/chat/RecordMicButton.kt`):
+(`presentation/components/chat/RecordGesture.kt`):
 
 ```kotlin
 internal fun recordGestureEnd(locked: Boolean, slidToCancel: Boolean, released: Boolean) = when {

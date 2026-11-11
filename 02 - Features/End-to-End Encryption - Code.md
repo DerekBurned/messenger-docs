@@ -1,12 +1,14 @@
 # End-to-End Encryption - Code
 
-Companion to [[End-to-End Encryption]]. The full crypto source, block by block. Every file here
-is small enough to show complete; snippets are verbatim from the repo.
+Companion to [[End-to-End Encryption]]. The crypto source, block by block. Sections 1, 2, 5, 6 and the
+safety-number block show the real code; sections 3, 4, 7 and 8 changed a lot with the keyring and
+recovery work (PR #79) and are walked through in prose with minimal excerpts, so this vault does not
+copy them. `path:line` refs are relative to `app/src/main/java/com/example/messenger/`.
 
 Files covered (`data/crypto/`): `ConversationCrypto.kt`, `model/MessagePayload.kt`,
 `model/MediaSecret.kt`, `model/ClipSecret.kt`, `CryptoEncoding.kt`, `E2eeMessageCodec.kt`,
-`IdentityKeyStore.kt`, `KeyWrapper.kt`, `MediaCipher.kt`, `PeerKeyRegistry.kt`,
-`E2eeBootstrap.kt`, `SafetyNumber.kt`. Long expressions are sometimes joined onto one line.
+`IdentityKeyStore.kt`, `IdentityKeyring.kt`, `KeyWrapper.kt`, `MediaCipher.kt`, `PeerKeyRegistry.kt`,
+`E2eeBootstrap.kt`, `E2eeState.kt`, `SafetyNumber.kt`. Long expressions are sometimes joined onto one line.
 
 ---
 
@@ -110,220 +112,72 @@ keys/nonces/ciphertext.
 
 ## 3. E2eeMessageCodec - encode/decode a Message
 
-`E2eeMessageCodec.kt` (the source also carries a few explanatory comments, not shown):
+`E2eeMessageCodec.kt` (200 lines). `isEncryptable` (`:32`) says whether a conversation has a resolvable
+partner and peer key.
+
+`encode` (`:38`):
+
+1. Calls are returned as plaintext (`:40`). It notes whether the message already carries encrypted media
+   (`hasEncryptedMedia`, a media item or clip with a `fileKey`, `:41`-`:45`).
+2. Resolves `myUid`, the partner (`participantResolver.partnerOf`) and the peer key
+   (`peerKeyRegistry.ensurePeerKey`); any miss goes to `plainOrFail` (`:46`-`:49`, `:87`), which throws
+   when media is already encrypted rather than send stranded plaintext.
+3. Takes the newest identity key with `identityKeyStore.require(myUid)` (`:50`) - sending always uses
+   the newest epoch - and builds a `MessagePayload` per message type (`:51`-`:68`): text and reply snippet;
+   caption plus one `MediaSecret(itemId, key, blurHash)` per encrypted item; or `clip.toSecret()`
+   (`:119`).
+4. Derives the conversation key (`ConversationCrypto.deriveConversationKey(identity.privateKey,
+   peer.publicKey, myUid, partnerId, identity.epoch, peer.epoch)`, `:69`-`:70`), computes the AAD
+   (`messageAad`, `:71`), encrypts the JSON payload, and returns the DTO with text, reply snippet,
+   blurHashes and waveform cleared and `enc = 1`, `ciphertext`, `nonce`, `senderEpoch`,
+   `recipientEpoch`, `recipientId` set (`:72`-`:85`).
+
+`decode` (`:94`): `enc != 1` is plaintext. Otherwise `decryptPayload` (`:129`) picks the sender or
+recipient side, then looks up this device's key **for the message's epoch**:
 
 ```kotlin
-@Singleton
-class E2eeMessageCodec @Inject constructor(
-    private val identityKeyStore: IdentityKeyStore,
-    private val peerKeyRegistry: PeerKeyRegistry,
-    private val authService: FirebaseAuthService,
-    private val participantResolver: ParticipantResolver,
-) {
-    private val json = Json { ignoreUnknownKeys = true }
-
-    private val lastKeyRefreshAttempt = java.util.concurrent.ConcurrentHashMap<String, Long>()
-
-    suspend fun isEncryptable(conversationId: String): Boolean {
-        val myUid = authService.getCurrentUserId() ?: return false
-        val partnerId = participantResolver.partnerOf(conversationId, myUid) ?: return false
-        return peerKeyRegistry.ensurePeerKey(partnerId) != null
-    }
-
-    suspend fun encode(message: Message): RemoteMessageDto {
-        val plain = message.toRemoteDto()
-        if (message is Message.Call) return plain
-        val hasEncryptedMedia = when (message) {
-            is Message.Media -> message.items.any { !it.fileKey.isNullOrBlank() }
-            is Message.Clip -> !message.clip.fileKey.isNullOrBlank()
-            else -> false
-        }
-        val myUid = authService.getCurrentUserId() ?: return plainOrFail(hasEncryptedMedia, plain)
-        val partnerId = participantResolver.partnerOf(message.conversationId, myUid)
-            ?: return plainOrFail(hasEncryptedMedia, plain)
-        val peer = peerKeyRegistry.ensurePeerKey(partnerId) ?: return plainOrFail(hasEncryptedMedia, plain)
-        val identity = identityKeyStore.getOrCreate(myUid)
-        val payload = when (message) {
-            is Message.Text -> MessagePayload(text = message.text, replyToText = message.replyToText)
-            is Message.Media -> MessagePayload(
-                text = message.caption, replyToText = message.replyToText,
-                media = message.items.mapNotNull { item ->
-                    item.fileKey?.takeIf { it.isNotBlank() }?.let { key ->
-                        MediaSecret(itemId = item.id, key = key, blurHash = item.blurHash)
-                    }
-                },
-            )
-            is Message.Clip -> MessagePayload(
-                replyToText = message.replyToText,
-                clip = message.clip.toSecret(),
-            )
-            is Message.Call -> return plain
-        }
-        val key = ConversationCrypto.deriveConversationKey(
-            identity.privateKey, peer.publicKey, myUid, partnerId, identity.epoch, peer.epoch)
-        val aad = messageAad(plain.conversationId, plain.id, plain.senderId, plain.type)
-        val blob = ConversationCrypto.encrypt(key, json.encodeToString(payload).toByteArray(), aad)
-        return plain.copy(
-            text = "", replyToText = null,
-            mediaItems = plain.mediaItems.map { it.copy(blurHash = "") },
-            clip = plain.clip?.copy(waveform = emptyList()),
-            enc = 1, ciphertext = b64(blob.ciphertext), nonce = b64(blob.nonce),
-            senderEpoch = identity.epoch, recipientEpoch = peer.epoch, recipientId = partnerId)
-    }
-
-    private fun plainOrFail(hasEncryptedMedia: Boolean, plain: RemoteMessageDto): RemoteMessageDto {
-        check(!hasEncryptedMedia) { "media already encrypted but no peer key resolvable; refusing to send stranded plaintext" }
-        return plain
-    }
-
-    suspend fun decode(dto: RemoteMessageDto, hasPendingWrites: Boolean = false): Message {
-        if (dto.enc != 1) return dto.toDomain(hasPendingWrites)
-        val payload = runCatching { decryptPayload(dto) }.getOrNull()
-            ?: runCatching { retryWithFreshPeerKey(dto) }.getOrNull()
-            ?: return undecryptable(dto, hasPendingWrites)
-        val message = dto.copy(text = payload.text, replyToText = payload.replyToText)
-            .toDomain(hasPendingWrites)
-        val clipSecret = payload.clip
-        return when {
-            message is Message.Media && payload.media.isNotEmpty() -> {
-                val secrets = payload.media.associateBy { it.itemId }
-                message.copy(
-                    items = message.items.map { item ->
-                        secrets[item.id]?.let { secret ->
-                            item.copy(fileKey = secret.key, blurHash = secret.blurHash)
-                        } ?: item
-                    },
-                )
-            }
-            message is Message.Clip && clipSecret != null ->
-                message.copy(clip = message.clip.withSecret(clipSecret))
-            else -> message
-        }
-    }
-
-    private fun Clip.toSecret(): ClipSecret = when (this) {
-        is Clip.Voice -> ClipSecret(key = fileKey?.takeIf { it.isNotBlank() }, waveform = waveform)
-        is Clip.Video -> ClipSecret(key = fileKey?.takeIf { it.isNotBlank() })
-    }
-
-    private fun Clip.withSecret(secret: ClipSecret): Clip = when (this) {
-        is Clip.Voice -> copy(fileKey = secret.key, waveform = secret.waveform)
-        is Clip.Video -> copy(fileKey = secret.key)
-    }
-
-    private suspend fun decryptPayload(dto: RemoteMessageDto): MessagePayload {
-        val myUid = authService.getCurrentUserId() ?: error("not signed in")
-        val iAmSender = dto.senderId == myUid
-        val partnerId = if (iAmSender) dto.recipientId else dto.senderId
-        val myEpoch = if (iAmSender) dto.senderEpoch else dto.recipientEpoch
-        val partnerEpoch = if (iAmSender) dto.recipientEpoch else dto.senderEpoch
-        val identity = identityKeyStore.getOrCreate(myUid)
-        check(identity.epoch == myEpoch) { "local epoch ${identity.epoch}, message needs $myEpoch" }
-        val peer = peerKeyRegistry.cachedPeerKey(partnerId, partnerEpoch)
-            ?: peerKeyRegistry.peerKeyForEpoch(partnerId, partnerEpoch)
-            ?: error("no key for $partnerId epoch $partnerEpoch")
-        val key = ConversationCrypto.deriveConversationKey(
-            identity.privateKey, peer.publicKey, myUid, partnerId, identity.epoch, peer.epoch)
-        val aad = messageAad(dto.conversationId, dto.id, dto.senderId, dto.type)
-        val plaintext = ConversationCrypto.decrypt(key, unb64(dto.nonce), unb64(dto.ciphertext), aad)
-        return json.decodeFromString(String(plaintext))
-    }
-
-    private suspend fun retryWithFreshPeerKey(dto: RemoteMessageDto): MessagePayload {
-        val myUid = authService.getCurrentUserId() ?: error("not signed in")
-        val iAmSender = dto.senderId == myUid
-        val partnerId = if (iAmSender) dto.recipientId else dto.senderId
-        val partnerEpoch = if (iAmSender) dto.recipientEpoch else dto.senderEpoch
-        check(partnerId.isNotBlank()) { "no partner to refresh key for" }
-        val throttleKey = "$partnerId:$partnerEpoch"
-        val now = System.currentTimeMillis()
-        val last = lastKeyRefreshAttempt[throttleKey]
-        check(last == null || now - last >= KEY_REFRESH_THROTTLE_MS) { "peer key recently refreshed" }
-        lastKeyRefreshAttempt[throttleKey] = now
-        peerKeyRegistry.refreshPeerKey(partnerId, partnerEpoch)
-        return decryptPayload(dto)
-    }
-
-    private fun undecryptable(dto: RemoteMessageDto, hasPendingWrites: Boolean): Message =
-        dto.copy(
-            text = UNDECRYPTABLE_TEXT,
-            type = Message.TYPE_TEXT,
-            mediaItems = emptyList(),
-            clip = null,
-            replyToMessageId = null,
-            replyToText = null,
-            replyToSenderId = null,
-        ).toDomain(hasPendingWrites)
-
-    companion object {
-        const val UNDECRYPTABLE_TEXT = "Message cannot be decrypted on this device"
-        private const val KEY_REFRESH_THROTTLE_MS = 5 * 60 * 1000L
-    }
-}
+val identity = identityKeyStore.keyFor(myUid, myEpoch) ?: error("no local key for epoch $myEpoch")
 ```
 
-`encode` builds the `MessagePayload`, derives the key, AES-GCM-encrypts, and returns a DTO with
-plaintext cleared (text, reply snippet, blurHashes, a clip's waveform) and `enc=1` +
-ciphertext/nonce/epochs set; it refuses to downgrade to plaintext when media or a clip is already
-encrypted (`plainOrFail`). `decode` works out which epochs apply based on sender/recipient, loads
-the matching peer key, and decrypts. If that fails it refetches the peer's published key for that
-epoch once (`retryWithFreshPeerKey`, at most every 5 minutes per peer and epoch, because `decode`
-runs on every snapshot emission); only then does it return the `undecryptable` placeholder. On
-success it re-hydrates media file keys or the clip's key and waveform. Wired into `FirestoreService`
-(see [[Chat and Messaging - Code]]) and the FCM handler (see [[Notifications - Code]]).
+and the partner's key for their epoch (`cachedPeerKey`, then `peerKeyForEpoch`), derives the key and
+decrypts with the same AAD. On failure it tries `retryWithFreshPeerKey` (`:153`, at most once per
+peer and epoch per 5 minutes, `KEY_REFRESH_THROTTLE_MS`), and then returns an `undecryptable` message
+(`:179`) whose text comes from `placeholderFor` (`:168`): `UNDECRYPTABLE_TEXT`, `LOCKED_TEXT` ("Sent
+before your encryption key was reset") or `BEHIND_TEXT` ("Sent to a newer encryption key that this
+device doesn't have yet") (`:191`-`:195`). On success it puts the media `fileKey`s and blurHashes
+(`:103`-`:112`) or the clip key and waveform (`:113`-`:114`) back onto the domain message.
+`isPlaceholder` (`:197`) is used by `UndecryptableCachePurge` and by the FCM handler to avoid showing
+placeholder text in a notification. Wired into `FirestoreService` (see [[Chat and Messaging - Code]])
+and the FCM handler (see [[Notifications - Code]]).
 
 ---
 
-## 4. IdentityKeyStore
+## 4. IdentityKeyStore and IdentityKeyring
 
-`IdentityKeyStore.kt` in full - the device's long-term X25519 identity, persisted wrapped:
+`IdentityKey(privateKey, publicKey, epoch)` (`data/crypto/model/IdentityKey.kt`) is one X25519 pair.
+`IdentityKeyring` (`IdentityKeyring.kt:8`) holds one key per epoch, sorted by epoch: `newest` (`:17`) is
+used for sending, `keyFor(epoch)` (`:19`) for decrypting, `with`/`without` return changed copies, and
+`digest()` (`:29`) is a SHA-256 over the epochs and public keys (used by the recovery code store to know
+when to re-wrap). `IdentityKeyring.merge` (`:46`) merges an incoming ring with the local one, per epoch:
+the key the account published wins, a ring that contradicts a published local key yields `null`, and
+epochs newer than anything published are dropped.
 
-```kotlin
-class IdentityKey(val privateKey: ByteArray, val publicKey: ByteArray, val epoch: Int)
+`IdentityKeyStore` (`IdentityKeyStore.kt:12`, built in `di/CryptoModule.kt:39`-`:42` over
+`filesDir/e2ee`) persists the ring in `identity_v1_{uid}.bin`:
 
-class IdentityKeyStore(private val baseDir: File, private val keyWrapper: KeyWrapper) {
-    private val cache = ConcurrentHashMap<String, IdentityKey>()
+- `ring(uid)` / `current(uid)` / `keyFor(uid, epoch)` / `require(uid)` (`:21`-`:32`) read it (cached in
+  memory); `require` throws `IdentityUnavailableException` (`:9`).
+- `create(uid, epoch = 1)` (`:35`) and `addEpoch(uid, epoch)` (`:39`) generate a pair and persist;
+  `install(uid, ring, published)` (`:46`) merges a restored ring; `discard` (`:53`) removes one epoch;
+  `setAside` (`:64`) moves keys the account does not hold out of the ring (keeping a copy);
+  `delete` (`:89`) and `quarantine` (`:97`) handle account deletion and unreadable files.
+- `behindState` / `rememberBehind` / `forgetBehind` (`:70`-`:84`) persist the "behind" marker in
+  `behind_v1_{uid}.bin`.
+- `persist` (`:121`) wraps the encoded ring with `KeyWrapper`, writes a `.tmp` staging file and moves it
+  into place atomically (`:121`-`:127`). A file from the old single-key format decodes as a one-key
+  ring.
 
-    fun getOrCreate(uid: String): IdentityKey = cache.computeIfAbsent(uid) {
-        if (keyFile(uid).exists()) load(uid) else generateAndPersist(uid, epoch = 1)
-    }
-
-    fun rotate(uid: String): IdentityKey {
-        val next = generateAndPersist(uid, epoch = getOrCreate(uid).epoch + 1)
-        cache[uid] = next
-        return next
-    }
-
-    private fun load(uid: String): IdentityKey {
-        val bytes = keyWrapper.unwrap(keyFile(uid).readBytes())
-        return decode(bytes) ?: error("identity key file for $uid is present but unreadable")
-    }
-
-    private fun generateAndPersist(uid: String, epoch: Int): IdentityKey {
-        val (privateKey, publicKey) = ConversationCrypto.generateKeyPair()
-        val buffer = ByteBuffer.allocate(69)
-        buffer.put(1); buffer.putInt(epoch); buffer.put(privateKey); buffer.put(publicKey)
-        baseDir.mkdirs()
-        keyFile(uid).writeBytes(keyWrapper.wrap(buffer.array()))
-        return IdentityKey(privateKey, publicKey, epoch)
-    }
-
-    private fun decode(bytes: ByteArray): IdentityKey? {
-        if (bytes.size != 69 || bytes[0].toInt() != 1) return null
-        val buffer = ByteBuffer.wrap(bytes, 1, 68)
-        val epoch = buffer.int
-        val privateKey = ByteArray(32).also { buffer.get(it) }
-        val publicKey = ByteArray(32).also { buffer.get(it) }
-        return IdentityKey(privateKey, publicKey, epoch)
-    }
-
-    private fun keyFile(uid: String) = File(baseDir, "identity_v1_$uid.bin")
-}
-```
-
-The key is serialized as `[version=1][epoch:int][priv:32][pub:32]` = 69 bytes, wrapped by
-`KeyWrapper` before being written to `filesDir/e2ee/identity_v1_{uid}.bin`. `rotate` bumps the
-epoch - the rotation mechanism. Constructed in `di/CryptoModule.kt`.
+There is no `getOrCreate` or `rotate` any more: creating a key is `E2eeBootstrap`'s decision (section 8).
 
 ---
 
@@ -439,135 +293,53 @@ encrypted `MessagePayload` (see [[Chat and Messaging - Code]], [[Voice Messages 
 
 ## 7. PeerKeyRegistry
 
-`PeerKeyRegistry.kt` in full - publish/fetch/cache peer public keys, per epoch:
+`PeerKeyRegistry.kt` (177 lines). Keys live in Firestore `users/{uid}/keys/{epoch}` and are cached as
+`ObxPeerKey` rows (unique on `"uid:epoch"`).
 
-```kotlin
-class PeerKey(val uid: String, val publicKey: ByteArray, val epoch: Int, val verified: Boolean)
-
-@Singleton
-class PeerKeyRegistry @Inject constructor(
-    private val firestore: FirebaseFirestore,
-    private val peerKeyBox: Box<ObxPeerKey>,
-    private val identityKeyStore: IdentityKeyStore,
-) {
-    suspend fun publishIfNeeded(myUid: String) {
-        var identity = identityKeyStore.getOrCreate(myUid)
-        var localPub = b64(identity.publicKey)
-        val existing = runCatching {
-            keysCollection(myUid).document(identity.epoch.toString()).get().await()
-        }.getOrNull()
-
-        if (existing?.exists() == true && existing.getString("pub") != localPub) {
-            val serverMax = runCatching {
-                keysCollection(myUid).orderBy("epoch", Query.Direction.DESCENDING).limit(1).get()
-                    .await().documents.firstOrNull()?.getLong("epoch")?.toInt()
-            }.getOrNull() ?: identity.epoch
-            while (identity.epoch <= serverMax) identity = identityKeyStore.rotate(myUid)
-            localPub = b64(identity.publicKey)
-        } else if (existing?.getString("pub") == localPub) {
-            return
-        }
-
-        keysCollection(myUid).document(identity.epoch.toString()).set(
-            mapOf(
-                "pub" to localPub,
-                "epoch" to identity.epoch,
-                "algo" to "X25519",
-                "updatedAt" to System.currentTimeMillis(),
-            ),
-        ).await()
-    }
-
-    suspend fun refreshPeerKey(uid: String, epoch: Int): PeerKey? {
-        val doc = runCatching { keysCollection(uid).document(epoch.toString()).get().await() }
-            .getOrNull() ?: return cachedPeerKey(uid, epoch)
-        val pub = doc.getString("pub") ?: return cachedPeerKey(uid, epoch)
-        return store(uid, epoch, pub).toPeerKey()
-    }
-
-    suspend fun ensurePeerKey(uid: String): PeerKey? {
-        val cached = latestLocal(uid)
-        if (cached != null && System.currentTimeMillis() - cached.seenAt < REFRESH_MS) return cached.toPeerKey()
-        val snapshot = runCatching {
-            keysCollection(uid).orderBy("epoch", Query.Direction.DESCENDING).limit(1).get().await()
-        }.getOrNull()
-        val doc = snapshot?.documents?.firstOrNull() ?: return cached?.toPeerKey()
-        val pub = doc.getString("pub") ?: return cached?.toPeerKey()
-        val epoch = doc.getLong("epoch")?.toInt() ?: return cached?.toPeerKey()
-        return store(uid, epoch, pub).toPeerKey()
-    }
-
-    suspend fun peerKeyForEpoch(uid: String, epoch: Int): PeerKey? {
-        localRow(uid, epoch)?.let { return it.toPeerKey() }
-        val doc = runCatching { keysCollection(uid).document(epoch.toString()).get().await() }.getOrNull() ?: return null
-        val pub = doc.getString("pub") ?: return null
-        return store(uid, epoch, pub).toPeerKey()
-    }
-
-    fun cachedPeerKey(uid: String, epoch: Int): PeerKey? = localRow(uid, epoch)?.toPeerKey()
-    fun latestPeerKey(uid: String): PeerKey? = latestLocal(uid)?.toPeerKey()
-
-    fun setVerified(uid: String, verified: Boolean) {
-        val row = latestLocal(uid) ?: return
-        row.verified = verified
-        peerKeyBox.put(row)
-    }
-
-    private fun store(uid: String, epoch: Int, pub: String): ObxPeerKey {
-        val existing = localRow(uid, epoch)
-        val row = ObxPeerKey(boxId = existing?.boxId ?: 0, uidEpoch = "$uid:$epoch", uid = uid,
-            epoch = epoch, publicKey = pub, verified = existing?.verified ?: false,
-            seenAt = System.currentTimeMillis())
-        peerKeyBox.put(row)
-        return row
-    }
-
-    private fun localRow(uid: String, epoch: Int): ObxPeerKey? =
-        peerKeyBox.query(ObxPeerKey_.uidEpoch.equal("$uid:$epoch")).build().use { it.findFirst() }
-
-    private fun latestLocal(uid: String): ObxPeerKey? =
-        peerKeyBox.query(ObxPeerKey_.uid.equal(uid)).orderDesc(ObxPeerKey_.epoch).build().use { it.findFirst() }
-
-    private fun keysCollection(uid: String) = firestore.collection("users").document(uid).collection("keys")
-    private fun ObxPeerKey.toPeerKey() = PeerKey(uid, unb64(publicKey), epoch, verified)
-
-    companion object { private const val REFRESH_MS = 30 * 60 * 1000L }
-}
-```
-
-Keys are published under Firestore `users/{uid}/keys/{epoch}` and cached as `ObxPeerKey` rows
-(unique on `"uid:epoch"`). `publishIfNeeded` never overwrites a published key: a regenerated
-identity restarts at epoch 1, so if that epoch is already published with a different key it rotates
-the local identity until its epoch is above the server's highest, then publishes there - peers
-that cached the old key can still decrypt history. `ensurePeerKey` serves a fresh cached key
-(< 30 min) or fetches the latest epoch; `peerKeyForEpoch` fetches a specific historical epoch so
-old messages stay decryptable across rotations; `refreshPeerKey` bypasses the cache for the
-codec's one-shot decode retry. (The source explains the rotation and the refresh in comments, not
-shown here.)
+- `publishIfNeeded(myUid, identity, allowNewEpoch = false)` (`:31`) first runs the pure
+  `precheckPublish` (`:167`), then a Firestore **transaction** (`:40`-`:59`) that creates
+  `users/{uid}/keys/{epoch}` only if absent and returns `Published`, `AlreadyPublished` (same key) or
+  `Conflict` (different key); `PERMISSION_DENIED` is also `Conflict` (`:60`-`:62`). It never overwrites
+  and never rotates. `PublishResult` is at `:19`-`:23`.
+- `publishedKeysOnServer(uid)` (`:82`) reads every published key from the server; `observeNewestKey(uid)`
+  (`:65`) is a snapshot listener on the newest epoch.
+- `ensurePeerKey` (`:101`) serves a fresh cached key (< 30 min, `REFRESH_MS`, `:164`) or fetches the
+  latest epoch; `peerKeyForEpoch` (`:115`) fetches a specific historical epoch; `refreshPeerKey` (`:94`)
+  bypasses the cache for the codec's one-shot decode retry; `cachedPeerKey` / `latestPeerKey`
+  (`:123`, `:125`) are local-only.
+- `store` (`:133`) upserts the cache row and clears the `verified` flag when the public key under the same
+  epoch changes; `setVerified` (`:127`) is used by safety-number verification.
 
 ---
 
 ## 8. E2eeBootstrap and SafetyNumber
 
-`E2eeBootstrap.kt` in full - publishes this device's key on startup:
+`E2eeState.kt` defines the state the app gates on: `E2eeState` (`:3`) is `Resolving`, `Ready`,
+`NeedsLink(hasVault)`, `Behind(hasVault)` or `Offline`; `E2eeStatus` (`:11`) pairs it with a uid and
+`stateFor(sessionUid)` ignores a status that belongs to another account; `RecoveryStatus` (`:15`) and
+`RestoreResult` (`:21`) describe the recovery code and a restore attempt.
 
-```kotlin
-@Singleton
-class E2eeBootstrap @Inject constructor(
-    private val authService: FirebaseAuthService,
-    private val peerKeyRegistry: PeerKeyRegistry,
-) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+`E2eeBootstrap.kt` (446 lines, `@Singleton`, own `SupervisorJob` IO scope and a mutex):
 
-    fun publishKeys() {
-        val uid = authService.getCurrentUserId() ?: return
-        scope.launch { runCatching { peerKeyRegistry.publishIfNeeded(uid) } }
-    }
-}
-```
+- `refresh` (`:55`) resets the status when the signed-in uid changes and launches `resolve` (`:64`),
+  which runs `resolveLocked` (`:181`) under the mutex; a failure becomes `Offline` and `scheduleRetry`
+  (`:426`, `RETRY_DELAY_MS = 5_000`).
+- `resolveLocked` decides: local ring -> `Ready` + background `sync`; else a Block Store ring that
+  shares a key with the account is installed; else, if the account already has published keys or a
+  recovery vault, `NeedsLink`; else create epoch 1 and publish it (a lost race discards the key).
+- `sync` (`:248`) publishes the newest key if needed (a `Conflict` triggers `recheck`, `:303`), saves the
+  ring to Block Store and refreshes the recovery status (`refreshRecoveryStatus`, `:340`, which re-wraps
+  the vault via `rewrapVault`, `:375`).
+- `watch` (`:269`) observes the account's newest key; `looksBehind` (`:298`) and `settle` (`:326`) set
+  aside keys the account contradicts and move to `NeedsLink` or `Behind` after `BEHIND_GRACE_MS` (5 s).
+- `restoreWithCode` (`:81`), `startFresh` (`:110`), `newRecoveryCode` (`:142`), `saveRecoveryCode`
+  (`:144`), `savedRecoveryCode` (`:165`), `stop` (`:170`) and `forget` (`:174`) are the entry points used
+  by the recovery view models and by `AndroidSessionCleaner`.
 
-Called from `MessengerApplication.onCreate` and every successful sign-in (see
-[[Authentication - Code]]); it owns an app-scoped IO scope.
+Called from `MessengerApplication.onCreate` (`MessengerApplication.kt:118`) and after every successful
+sign-in (`data/repository/AuthRepositoryImpl.kt:69`, `:99`; see [[Authentication - Code]]). The gate that
+shows `KeyRestoreScreen` until the state is `Ready` is in
+`presentation/navigation/graph/AppNavigation.kt:43`-`:60`.
 
 `SafetyNumber.kt` in full - the comparable fingerprint:
 
@@ -594,11 +366,12 @@ object SafetyNumber {
 
 Each side is SHA-512 iterated 5200 times, reduced mod 10^30; the two halves are sorted so both
 users see the same number, then formatted in groups of five. Surfaced by `SafetyNumberViewModel` /
-`SafetyNumberSection` on the security screen ([[Settings - Code]]).
+`SafetyNumberSection` on the chat partner's profile (`ChatUserProfileScreenContent.kt:175`, see
+[[Chat Profile and Shared Media - Code]]).
 
 ---
 
 ## Related
 
 [[End-to-End Encryption]] - [[Chat and Messaging - Code]] - [[Notifications - Code]] -
-[[Settings - Code]] - [[Dependency Injection (Hilt)]] - [[Data Layer]]
+[[Chat Profile and Shared Media - Code]] - [[Settings - Code]] - [[Dependency Injection (Hilt)]] - [[Data Layer]]

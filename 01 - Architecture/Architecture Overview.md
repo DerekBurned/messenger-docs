@@ -16,9 +16,12 @@ com.example.messenger
   MessengerApplication.kt   the @HiltAndroidApp entry point
 ```
 
-File counts at 0.1.13.1 (2026-10-03): `presentation` 254, `data` 101, `domain` 70, `di` 11,
-`util` 10 Kotlin files. The growth since the first count is mostly the 2026-08-11 file-layout
-refactor (one subject per file) plus voice messages, account deletion and the session gate.
+File counts at release 0.2.2.4 (2026-11-11): `presentation` 252, `data` 120, `domain` 77, `di` 12,
+`util` 10 Kotlin files, plus the single `MessengerApplication.kt` at the root. The growth since the
+first count is mostly the 2026-08-11 file-layout refactor (one subject per file) plus voice
+messages, account deletion, the session gate, feature flags and the recovery-code encryption
+work. `domain/featureflag/` and `presentation/featureflag/` are new packages - see
+[[Feature Flags and Remote Config]].
 
 ## Dependency rule
 
@@ -47,8 +50,8 @@ Presentation - Compose screens observe a `StateFlow<UiState>` from a ViewModel a
 `SharedFlow`. Full detail in [[Presentation Layer (MVI)]] and [[Navigation]].
 
 Domain - single-responsibility use cases (`domain/usecase/...`) expose `operator fun invoke`
-and orchestrate repositories. They are plain classes, constructor-injected, with no Android
-dependencies. Full detail in [[Domain Layer]].
+and orchestrate repositories. They are plain classes, constructor-injected, with almost no Android
+dependencies (the few exceptions are listed in [[Domain Layer]]). Full detail in [[Domain Layer]].
 
 Data - repositories implement the domain interfaces and are the only place that touches
 ObjectBox, Firestore, Realtime Database, Storage, or the crypto codec. They are the merge
@@ -58,14 +61,14 @@ network is a writer/refresher behind it. Full detail in [[Data Layer]].
 ## End-to-end data flow: sending and seeing a text message
 
 1. UI dispatches `ChatIntent.SendMessage(text)` to `ChatViewModel`
-   (`handleIntent`, `presentation/viewmodel/ChatViewModel.kt:193`).
+   (`handleIntent`, `presentation/screens/chat/ChatViewModel.kt:190`).
 2. The ViewModel calls `SendMessageUseCase`
    (`domain/usecase/message/SendMessageUseCase.kt:17`), which builds a `Message.Text` with a
    `UUID` id and `MessageStatus.SENDING`, then calls the repository.
 3. `MessageRepositoryImpl.sendMessage` (`data/repository/MessageRepositoryImpl.kt:53`) writes
    the message to ObjectBox first (`messageBox.put`), updates the conversation preview, then
    attempts the Firestore write via `FirestoreService.sendMessage`
-   (`data/remote/firebase/FirestoreService.kt:133`). On network failure it flips the row to
+   (`data/remote/firebase/FirestoreService.kt:111`). On network failure it flips the row to
    `FAILED` and enqueues a retry in the sync queue.
 4. The message is already on screen, because the UI reads a cold ObjectBox stream:
    `getMessagesStream` (`data/repository/MessageRepositoryImpl.kt:34`) returns a
@@ -73,7 +76,7 @@ network is a writer/refresher behind it. Full detail in [[Data Layer]].
    triggers a re-emission; the ViewModel's `GetMessagesUseCase` collects it and calls
    `setState`.
 5. Separately, `observeRecentMessages` / `getRecentMessagesStream`
-   (`data/remote/firebase/FirestoreService.kt:251`) keeps a Firestore snapshot listener open
+   (`data/remote/firebase/FirestoreService.kt:229`) keeps a Firestore snapshot listener open
    and writes incoming remote rows into ObjectBox, which again re-emits to the same UI stream.
 
 The important property: the read path and the write path are decoupled through ObjectBox. The
@@ -84,11 +87,14 @@ crash-safe outbox - see [[Voice Messages]].
 
 ## App startup wiring
 
-`MessengerApplication` (`MessengerApplication.kt:34`) is `@HiltAndroidApp` and
+`MessengerApplication` (`MessengerApplication.kt:36`) is `@HiltAndroidApp` and
 `Configuration.Provider` (it supplies the `HiltWorkerFactory` so `@HiltWorker` workers get
-their dependencies). Its `onCreate` (`MessengerApplication.kt:61`) is the composition root for
-long-lived, app-scoped machinery, all `@Inject`ed as singletons:
+their dependencies). Its `onCreate` (`MessengerApplication.kt:69`) is the composition root for
+long-lived, app-scoped machinery, all `@Inject`ed as singletons. The very first call is
+`featureFlags.start()`, so Remote Config is fetching before anything else runs:
 
+- `FeatureFlags.start()` - starts the Firebase Remote Config fetch/listen loop that drives the
+  feature kill-switches (see [[Feature Flags and Remote Config]]).
 - Coil `SingletonImageLoader` with a 10%-of-RAM memory cache and a 30 MB disk cache
   (`filesDir/image_cache`, wiped on logout), plus the `VideoFrameDecoder` for video thumbnails.
 - A default uncaught-exception handler that logs the crash and then delegates to the previous
@@ -98,11 +104,13 @@ long-lived, app-scoped machinery, all `@Inject`ed as singletons:
   presence (see [[Presence and Typing]]).
 - `SyncCoordinator.start()` and `SyncManager.schedulePeriodicSync()` - the offline sync
   machinery (see [[Data Layer]]).
-- `FcmTokenSyncer.start()`, `IncomingCallCoordinator.start()`,
-  `TelecomCallManager.registerPhoneAccount()` - push and call plumbing.
+- `FcmTokenSyncer.start()`, `CrashlyticsUserSync.start()` (tags Crashlytics reports with the
+  signed-in uid), `IncomingCallCoordinator.start()`,
+  `TelecomCallManager.registerPhoneAccount()` - push, crash-reporting and call plumbing.
 - `registerMemoryProfiling()` - on API 37+ registers OOM and anomaly `ProfilingTrigger`s and
   logs where the results land.
-- `E2eeBootstrap.publishKeys()` - publishes this device's public identity key (see
+- `E2eeBootstrap.refresh()` - resets the encryption status if the signed-in uid changed and
+  launches `resolve()` to load or publish this device's identity key (see
   [[End-to-End Encryption]]).
 
 `MainActivity` installs the core-splashscreen (`installSplashScreen()`) before
@@ -119,4 +127,5 @@ blocks start their own collectors.
 
 [[Presentation Layer (MVI)]] - [[Domain Layer]] - [[Data Layer]] -
 [[Dependency Injection (Hilt)]] - [[Async and Reactivity]] - [[Navigation]] -
-[[Voice Messages]] - [[Tech Stack and Versions]]
+[[Voice Messages]] - [[Feature Flags and Remote Config]] - [[Tech Stack and Versions]] -
+[[Build, CI and Releases]]

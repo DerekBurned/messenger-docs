@@ -56,7 +56,7 @@ player.play()
   stack so two surfaces for one clip never freeze each other
   (`data/media/ClipPlaybackController.kt:73`).
 - Seeking is done by dragging along the circle's edge (`ringFraction`,
-  `presentation/screens/chat/VideoNoteBubble.kt:85`).
+  `presentation/screens/chat/VideoNoteBubble.kt:87`).
 
 ## Related
 

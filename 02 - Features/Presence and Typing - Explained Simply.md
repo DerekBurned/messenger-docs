@@ -35,11 +35,12 @@ the board becomes correct.
 
 ## Step by step: the typing bubble
 
-1. As you type, the app waits 500ms (so it does not spam on every keystroke), then writes a note
-   under `typing/{chatId}/{yourId}` (`ChatViewModel.onTextChanged`,
-   `presentation/viewmodel/ChatViewModel.kt:500`).
+1. As you type, the app writes a note under `typing/{chatId}/{yourId}` and refreshes it every 3
+   seconds while you keep typing (so it does not spam on every keystroke; `ChatViewModel.onTextChanged`,
+   `presentation/screens/chat/ChatViewModel.kt:500`).
 
-2. It also sets a 5-second self-clear, and clears immediately if you empty the box.
+2. Every keystroke restarts a 2-second "you stopped" timer; when it runs out (or you empty the box, or
+   send) the note is cleared. The reader also ignores notes older than 6 seconds.
 
 3. The other person watches `typing/{chatId}`, ignores their own id, and shows "typing..." if
    anyone is left.
@@ -77,16 +78,18 @@ Not spamming presence writes (`data/presence/PresenceManager.kt:24`):
 private val transitions = Channel<PresenceState>(Channel.CONFLATED)
 ```
 
-Typing: debounce + auto-clear (`presentation/viewmodel/ChatViewModel.kt:379`):
+Typing: heartbeat + idle stop (`presentation/screens/chat/ChatViewModel.kt:536`-`:552`):
 
 ```kotlin
-typingJob = viewModelScope.launch {
-    delay(500)                       // wait until you pause typing, then announce it
-    typingService.setTyping(chatId)
+typingHeartbeatJob = viewModelScope.launch {
+    while (isActive) {               // while you keep typing, re-announce every 3 seconds
+        typingService.setTyping(chatId)
+        delay(3000)
+    }
 }
-typingClearJob = viewModelScope.launch {
-    delay(5000)                      // and auto-clear after 5s in case you walk away
-    typingService.clearTyping(chatId)
+typingStopJob = viewModelScope.launch {
+    delay(2000)                      // 2 seconds without a keystroke -> you stopped
+    stopTyping()                     // cancels both jobs and clears the note
 }
 ```
 

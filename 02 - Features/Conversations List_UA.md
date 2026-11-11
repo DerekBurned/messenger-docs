@@ -10,7 +10,7 @@ tags:
 
 ## Складові
 
-- `ChatsViewModel` (`presentation/viewmodel/ChatsViewModel.kt:35`, раніше `ConversationsViewModel`) -
+- `ChatsViewModel` (`presentation/screens/chats/ChatsViewModel.kt:37`, раніше `ConversationsViewModel`) -
   звичайна `ViewModel` із `MutableStateFlow<ConversationsUiState>` (стиль метод-і-StateFlow, див.
   [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]]).
 - Use case (`domain/usecase/conversation/`): `GetConversationsUseCase`,
@@ -25,7 +25,7 @@ tags:
 
 ## Завантаження списку
 
-`loadConversations` (`ChatsViewModel.kt:81`) запускає потік розмов усередині `flatMapLatest` над
+`loadConversations` (`ChatsViewModel.kt:84`) запускає потік розмов усередині `flatMapLatest` над
 станом автентифікації, з обрамленням завантаження/помилки:
 
 ```kotlin
@@ -57,7 +57,7 @@ observeAuthStateUseCase()
 
 Базовий потік - локальний запит розмов ObjectBox (offline-first, див. [[Data Layer_UA|Шар даних]]),
 що оновлюється snapshot-слухачем Firestore (`FirestoreService.getAllConversations`,
-`data/remote/firebase/FirestoreService.kt:493`), який також повідомляє id видалених документів і
+`data/remote/firebase/FirestoreService.kt:504`), який також повідомляє id видалених документів і
 стан кешу. `onStart` запускає спінер; `catch` переводить у стан помилки замість падіння збирання.
 На кожному випромінюванні ViewModel розгалужується, щоб завантажити присутність і аватари учасників.
 
@@ -73,7 +73,7 @@ observeAuthStateUseCase()
 доходило, а видалений акаунт зберігав старе ім'я й фото. Тепер список читає співрозмовників із
 кешованих рядків користувачів:
 
-- `observeParticipants` (`ChatsViewModel.kt:64`) збирає `userRepository.observeCachedUsers()` у
+- `observeParticipants` (`ChatsViewModel.kt:67`) збирає `userRepository.observeCachedUsers()` у
   `ConversationsUiState.participants`.
 - `ChatsList` (`presentation/screens/chats/ChatsList.kt`) бере живого `participant` для кожного
   рядка, відкочується до заморожених масивів лише до надходження живого значення й обчислює
@@ -83,16 +83,16 @@ observeAuthStateUseCase()
 
 ## Присутність і аватари в рядках
 
-- `observeParticipantPresence` (`ChatsViewModel.kt:155`) скасовує попередній `presenceJob`, збирає
+- `observeParticipantPresence` (`ChatsViewModel.kt:158`) скасовує попередній `presenceJob`, збирає
   `observeUserPresenceUseCase.observeMultiple(...)` для унікальної множини інших учасників
   (`combine` потоків присутності по користувачах, див.
   [[Presence and Typing_UA|Присутність і набір тексту]]) і записує `presenceMap` у стан. Скасування
   попереднього job перед повторною підпискою не дає протікати спостерігачу застарілої множини.
-- `loadParticipantAvatars` (`ChatsViewModel.kt:110`) спершу засіває URL аватарів, уже вбудовані в
+- `loadParticipantAvatars` (`ChatsViewModel.kt:113`) спершу засіває URL аватарів, уже вбудовані в
   розмову (`participantAvatars`), потім отримує ще не відомих користувачів через
   `userRepository.getUserById`, відстежуючи `fetchedUserIds`, тож кожного користувача отримують
   один раз (невдале отримання повторюється наступного разу).
-- `observeAliases` (`ChatsViewModel.kt:72`) оновлює й спостерігає псевдоніми контактів, тож локально
+- `observeAliases` (`ChatsViewModel.kt:75`) оновлює й спостерігає псевдоніми контактів, тож локально
   перейменований контакт показує власне ім'я.
 
 ## Прокручування під плаваючими барами
@@ -104,10 +104,12 @@ observeAuthStateUseCase()
 
 ## Створення розмови
 
-`createConversation(participantId)` (`ChatsViewModel.kt:222`) викликає `CreateConversationUseCase`,
+`createConversation(participantId)` (`ChatsViewModel.kt:229`) викликає `CreateConversationUseCase`,
 який знаходить наявну розмову 1:1 (`FirestoreService.findExistingConversation`,
-`FirestoreService.kt:400`) або створює нову із `visibleTo = participantIds`
-(`FirestoreService.createConversation`, `:423`). Почати розмову з видаленим акаунтом не можна.
+`FirestoreService.kt:411`) або створює нову із `visibleTo = participantIds`
+(`FirestoreService.createConversation`, `:434`). Почати розмову з видаленим акаунтом не можна: це
+відхиляється в репозиторії ("Cannot start a conversation with a deleted account",
+`data/repository/ConversationRepositoryImpl.kt:102`-`:104`).
 Створення з пошуку відбувається через `SearchResultsOverlay` (див.
 [[Search and Suggestions_UA|Пошук і підказки]]), який потім переходить до чату.
 
@@ -116,25 +118,48 @@ observeAuthStateUseCase()
 Три окремі операції, віддзеркалені на рівні повідомлень у
 [[Chat and Messaging_UA|Чат і обмін повідомленнями]]:
 
-- `deleteForMe(conversationId)` (`ChatsViewModel.kt:194`) -> `ClearConversationForMeUseCase` ->
-  `FirestoreService.clearConversationForMe` (`FirestoreService.kt:444`): пише
+- `deleteForMe(conversationId)` (`ChatsViewModel.kt:197`) -> `ClearConversationForMeUseCase` ->
+  `FirestoreService.clearConversationForMe` (`FirestoreService.kt:455`-`:464`): пише
   `clearedAt.{uid} = now` і прибирає uid з `visibleTo`. Розмова зникає зі списку цього користувача,
   а повідомлення до межі ховаються локально (`clearedAtForMe` на `ObxConversation`, використовується
   як межа повідомлень у `MessageRepositoryImpl.cutoffFor`, `data/repository/MessageRepositoryImpl.kt:47`).
   Інший учасник не зачіпається.
-- `deleteForEveryone(conversationId)` (`ChatsViewModel.kt:201`) ->
+- `deleteForEveryone(conversationId)` (`ChatsViewModel.kt:205`) ->
   `DeleteConversationForEveryoneUseCase` -> видаляє документ розмови для всіх учасників.
-- `deleteConversation(conversationId)` (`ChatsViewModel.kt:176`) -> `DeleteConversationUseCase` ->
-  `FirestoreService.deleteConversation` (`FirestoreService.kt:434`) жорстко видаляє документ.
+- `deleteConversation(conversationId)` (`ChatsViewModel.kt:179`) -> `DeleteConversationUseCase` ->
+  `FirestoreService.deleteConversation` (`FirestoreService.kt:445`) жорстко видаляє документ. Жоден
+  composable у `presentation/` цей метод ViewModel не викликає; екран редагування чатів доходить до
+  того самого use case через `EditChatViewModel.deleteSelected`
+  (`presentation/screens/editchat/EditChatViewModel.kt:56`).
 
-`SwipeableConversationRow` виводить їх, плюс позначити прочитаним / непрочитаним
-(`ChatsViewModel.kt:208`, `:215`), як свайп-дії.
+`SwipeableConversationRow` виводить видалення для себе й для всіх (для всіх - лише на рядках
+один-на-один, `isOneOnOne`, `ChatsList.kt:106`), плюс позначити прочитаним / непрочитаним
+(`ChatsViewModel.kt:213`, `:221`) і Edit, як свайп-дії.
 
 ## Оновлення й помилки
 
-`refresh` (`ChatsViewModel.kt:240`) перемикає `isRefreshing` навколо `syncConversationsUseCase()`
-(одноразове витягування з сервера, `fetchAllConversationsOnce`, `FirestoreService.kt:475`,
+`refresh` (`ChatsViewModel.kt:247`) перемикає `isRefreshing` навколо `syncConversationsUseCase()`
+(одноразове витягування з сервера, `fetchAllConversationsOnce`, `FirestoreService.kt:486`,
 використовує `Source.SERVER`). `clearError` скидає поле помилки.
+
+## Feature flag
+
+Дії списку вмикаються й вимикаються окремо (див. [[Feature Flags and Remote Config_UA|Feature flags і Remote Config]]):
+`CHAT_LIST_SWIPE_ACTIONS` - батько для `CHAT_LIST_MARK_READ`, `CHAT_LIST_DELETE`,
+`CHAT_LIST_DELETE_FOR_EVERYONE` і `CHAT_LIST_EDIT`; `CHAT_LIST_PULL_REFRESH` стоїть окремо. Кожен
+застосовується двічі:
+
+- UI: `SwipeableConversationRow` читає `CHAT_LIST_EDIT`, `CHAT_LIST_MARK_READ`, `CHAT_LIST_DELETE` і
+  (лише на рядках один-на-один) `CHAT_LIST_DELETE_FOR_EVERYONE`
+  (`presentation/components/list/SwipeableConversationRow.kt:77`-`:80`); кнопка дії показується, лише
+  якщо ввімкнено один із її прапорців, а рядок взагалі не можна свайпнути, коли дій не лишилося
+  (`:81`-`:85`). `ChatsList` передає `enabled = pullEnabled` у `pullToRefresh` з
+  `CHAT_LIST_PULL_REFRESH` (`presentation/screens/chats/ChatsList.kt:51`, `:58`).
+- ViewModel: `ChatsViewModel.deleteForMe` (`:198`), `deleteForEveryone` (`:206`), `markAsRead` і
+  `markAsUnread` (`:214`, `:222`, обидва на `CHAT_LIST_MARK_READ`) та `refresh` (`:248`) одразу
+  повертаються через `featureFlags.refuses(...)`. `EditChatViewModel.deleteSelected` і `markAllRead`
+  (`EditChatViewModel.kt:57`, `:66`) перевіряють `CHAT_LIST_EDIT`. `retry()` і `createConversation`
+  перевірки прапорця не мають.
 
 ## Чому такий дизайн
 
@@ -151,5 +176,5 @@ observeAuthStateUseCase()
 
 [[Chat and Messaging_UA|Чат і обмін повідомленнями]] -
 [[Presence and Typing_UA|Присутність і набір тексту]] - [[Data Layer_UA|Шар даних]] -
-[[Presentation Layer (MVI)_UA|Шар представлення (MVI)]] - [[Navigation_UA|Навігація]] -
+[[Feature Flags and Remote Config_UA|Feature flags і Remote Config]] - [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]] - [[Navigation_UA|Навігація]] -
 [[Search and Suggestions_UA|Пошук і підказки]] - [[Settings_UA|Налаштування]]

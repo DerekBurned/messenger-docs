@@ -18,7 +18,7 @@ with a progress ring on its edge that can be dragged to seek.
   ([[Voice Messages]]), rendering into a `TextureView`.
 - Thumbnails: Coil 3 `VideoFrameDecoder` (registered globally in `MessengerApplication`) on the
   local file.
-- Wire format: unchanged. `Clip.Video` (`domain/model/voiceMessage/Clip.kt`), message type
+- Wire format: unchanged. `Clip.Video` (`domain/model/voicemessage/Clip.kt`), message type
   `VIDEO_CLIP`, file `chatMedia/<conversationId>/<messageId>/clip.mp4`; `firestore.rules`,
   `storage.rules`, the encryption codec and the push label already accepted it before this work.
 
@@ -31,38 +31,38 @@ with a progress ring on its edge that can be dragged to seek.
   `Recording(conversationId, elapsedMs, started, locked)`.
 - `VideoNoteRecordingOverlay` (`presentation/components/chat/VideoNoteRecordingOverlay.kt:37`) -
   scrim, circular `PreviewView`, elapsed ring; drawn by `ChatScreenContent` between the list and
-  the composer (`presentation/screens/chat/ChatScreenContent.kt:502`).
-- `VideoNoteBubble` (`presentation/screens/chat/VideoNoteBubble.kt:100`) - replaces the old
-  `VideoClipPlaceholder`; used from `MessageBubble` (`presentation/screens/chat/MessageBubble.kt:211`).
+  the composer (`presentation/screens/chat/ChatScreenContent.kt:507`).
+- `VideoNoteBubble` (`presentation/screens/chat/VideoNoteBubble.kt:102`) - replaces the old
+  `VideoClipPlaceholder`; used from `MessageBubble` (`presentation/screens/chat/MessageBubble.kt:220`).
 - `ClipPlaybackController.attachVideo` / `detachVideo` (`data/media/ClipPlaybackController.kt:224`,
   `:229`) with `VideoViewStack` (`:73`).
-- `ClipKind` (`domain/model/voiceMessage/ClipKind.kt`) and `ClipRecording`
+- `ClipKind` (`domain/model/voicemessage/ClipKind.kt`) and `ClipRecording`
   (`data/media/VoiceRecorder.kt:55`) - the recording handed to the send path or the drafts,
   voice or video.
-- `IClipRepository.cachedFile` (`data/repository/ClipRepositoryImpl.kt:132`) - the local file
+- `IClipRepository.cachedFile` (`data/repository/ClipRepositoryImpl.kt:138`) - the local file
   for a thumbnail, never a download.
 
 ### Switching mode
 
 The mic button's `recordGesture` waits 200 ms after touch-down
-(`presentation/components/chat/RecordMicButton.kt:60`, `HOLD_TO_RECORD_MS` at `:121`). A release
+(`presentation/components/chat/RecordGesture.kt:62`, `HOLD_TO_RECORD_MS` at `:123`). A release
 inside that window is a tap: `ToggleClipMode` flips `ChatUiState.clipMode`
-(`presentation/viewmodel/ChatViewModel.kt:219`), the icon crossfades Mic <-> Videocam and a hint
+(`presentation/screens/chat/ChatViewModel.kt:222`), the icon crossfades Mic <-> Videocam and a hint
 bubble ("Hold to record a video message. Tap to switch to voice") shows for 2 s
-(`presentation/screens/chat/MessageComposer.kt:263`). Holding past 200 ms starts recording in the
+(`presentation/screens/chat/MessageComposer.kt:170`-`:174`). Holding past 200 ms starts recording in the
 current mode. The mode is ViewModel state, so it resets to voice when the chat is reopened.
 
 ### Permissions
 
 Video needs `CAMERA` and `RECORD_AUDIO` (`recordPermissions`,
-`presentation/screens/chat/ChatScreenWithNav.kt:53`). Missing ones are requested together with
+`presentation/screens/chat/ChatScreenWithNav.kt:51`). Missing ones are requested together with
 `RequestMultiplePermissions`; the rationale and "turned off, open Settings" dialogs use camera
-wording when the request came from video mode (`requestedForVideo`, `:130`, `:235`).
+wording when the request came from video mode (`requestedForVideo`, `:108`, `:128`).
 `VideoNoteRecorder.start` checks both again and refuses without them.
 
 ### Recording
 
-`ChatViewModel.startRecording` (`:227`) pauses any playing clip and calls
+`ChatViewModel.startRecording` (`ChatViewModel.kt:257`) pauses any playing clip and calls
 `videoNoteRecorder.start(conversationId)` (`VideoNoteRecorder.kt:154`). `start` refuses during a
 call, without permissions or without `AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE`, then sets
 `Recording(started = false)` and launches `bindAndRecord` (`:209`):
@@ -105,7 +105,7 @@ already-delivered recording as a draft or turns the pending `SEND` into `DRAFT`
 
 Interruptions match voice: `ActiveCallHolder` going active, `ProcessLifecycleOwner` dropping
 below `STARTED`, focus loss, `ChatViewModel.onCleared`, and the chat screen leaving composition
-(`ChatScreenWithNav.kt:166`, skipped for configuration changes).
+(`ChatScreenWithNav.kt:164`, skipped for configuration changes).
 
 ### Drafts
 
@@ -116,7 +116,7 @@ voice. `VoiceDraftBar` shows a video draft as a 36 dp round thumbnail plus "Vide
 
 ### Sending
 
-`sendRecording` (`ChatViewModel.kt:274`) builds `Clip.Video(durationMs, sizeBytes)` and calls
+`sendRecording` (`ChatViewModel.kt:304`) builds `Clip.Video(durationMs, sizeBytes)` and calls
 `clipRepository.sendClip`, the same outbox, encryption, size-scaled upload timeout and confirmed
 Firestore write as a voice note ([[Voice Messages]]). 38 MB at most stays under the Storage
 rule's 40 MB `clip.*` limit; 2 minutes at 1.2 Mbps is about 18 MB.
@@ -130,7 +130,7 @@ rule's 40 MB `clip.*` limit; 2 minutes at 1.2 Mbps is about 18 MB.
   `cachedFile` and draws the first frame with Coil; without a local file (a received clip not yet
   played) it shows the bubble gradient.
 - While active and loaded it composes `VideoNoteSurface`, a `TextureView` attached to the player.
-  ExoPlayer stretches video to the view, so `centerCropScale` (`:93`) computes a
+  ExoPlayer stretches video to the view, so `centerCropScale` (`:95`) computes a
   `setTransform` matrix that crops the 4:3 frame to the square.
 - Canvas ring: a white 30% track; while active a white progress arc from 12 o'clock plus a knob;
   while uploading or downloading an accent arc of `transfer.progress`.
@@ -138,11 +138,11 @@ rule's 40 MB `clip.*` limit; 2 minutes at 1.2 Mbps is about 18 MB.
   retry), hidden while playing so the picture is clear.
 - Chips: duration (position while active) with the unplayed dot, and time + status.
 - Gestures (`pointerInput(interactive, isActive)`): while active, a down within 28 dp of the ring
-  (`isOnRing`, `:90`) consumes the gesture and seeks to `ringFraction` (`:85`, 0 at 12 o'clock,
+  (`isOnRing`, `:92`) consumes the gesture and seeks to `ringFraction` (`:87`, 0 at 12 o'clock,
   clockwise) on every move; any other down waits for an up shorter than the long-press timeout
   and toggles play. Non-ring drags are not consumed, so `SwipeToReply` and `LongPressMessage`
   keep working.
-- The context-menu preview passes `interactive = false` and never creates a surface (`:266`).
+- The context-menu preview passes `interactive = false` and never creates a surface (`VideoNoteBubble.kt:272`; the preview call is `MessageBubble.kt:249`).
 
 ### Playback
 
@@ -153,6 +153,25 @@ and, if it was the shown one, renders into the view underneath. When a video not
 `shouldAutoAdvance` (`:88`) is false: it is marked played and playback stops (the bubble returns
 to its thumbnail) instead of continuing with the next voice note. Scrolling the bubble away
 detaches its surface; the audio continues and `ClipMiniPlayer` labels it "Video message".
+
+## Feature flag
+
+Video notes are gated by `video_notes` (`FeatureFlag.VIDEO_NOTES`), a sibling of `voice_messages`; see
+[[Feature Flags and Remote Config]] and [[Voice Messages]] for the shared recording, lock and
+playback flags. Enforcement points:
+
+- ViewModel: `ChatViewModel.requiredFlag` maps `StartRecording` to the flag of the current clip mode
+  and `ToggleClipMode` to the flag of the mode it would switch to; `ClipKind.VIDEO` maps to
+  `VIDEO_NOTES` (`ChatViewModel.kt:240`, `:242`, `:248`-`:252`), so with the flag off a stale UI cannot
+  start the camera.
+- UI: the composer reads `VIDEO_NOTES` next to `VOICE_MESSAGES` (`MessageComposer.kt:260`) and
+  `availableClipMode` (`:386`) moves the button to voice if video notes are off, so the tap that
+  toggles voice <-> video is only active when both are on (`:272`-`:276`).
+- Shared flags apply to the video bubble too: `CLIP_PLAYBACK` and `CLIP_SEEK`
+  (`presentation/screens/chat/VideoNoteBubble.kt:170`-`:171`), `RECORDING_LOCK`
+  (`MessageComposer.kt:287`, `:328`; `ChatViewModel.kt:241`).
+- `remoteconfig.template.json` documents `video_notes` as: off - the composer cannot switch to
+  video-note mode.
 
 ## Why this choice
 
@@ -227,5 +246,5 @@ flowchart TD
 ## Related
 
 [[Voice Messages]] - [[Chat and Messaging]] - [[Async and Reactivity]] - [[Data Layer]] -
-[[End-to-End Encryption]] - [[Tech Stack and Versions]] - [[Video Messages - Code]] -
+[[Feature Flags and Remote Config]] - [[End-to-End Encryption]] - [[Tech Stack and Versions]] - [[Video Messages - Code]] -
 [[Video Messages - Explained Simply]] - [[Video Messages - Basic Example]]

@@ -46,7 +46,7 @@ a recomposition or rotation does not re-open it, while still stopping when the s
 - The store is `ThemePreferenceStore` (`data/local/prefs/ThemePreferenceStore.kt:27`), a
   `@Singleton` over `preferencesDataStore("theme_prefs")`; the `runCatching` fallback to `SYSTEM`
   is exactly `themeMode` (`:40`).
-- `AppearanceViewModel` (`presentation/viewmodel/AppearanceViewModel.kt:30`) does the `stateIn`.
+- `AppearanceViewModel` (`presentation/screens/settings/appearance/AppearanceViewModel.kt:28`) does the `stateIn`.
 - The store holds more settings than the theme (background, intensity, bar position, text size,
   font, saved wallpapers) and layers a live-preview overlay on intensity - see
   [[Appearance and Theming - Basic Example]] and [[Appearance and Theming]].

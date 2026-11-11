@@ -5,10 +5,10 @@ is the largest feature; snippets are copied verbatim from the repo. Conceptual "
 main note.
 
 Files covered:
-- MVI: `presentation/state/chat/ChatUiState.kt` (with `PendingAttachment.kt` beside it),
-  `presentation/intent/ChatIntent.kt`, `presentation/effect/ChatEffect.kt`
-- `presentation/viewmodel/ChatViewModel.kt`
-- Use cases `domain/usecase/message/{GetMessageUseCase, SendMessageUseCase}.kt` (others noted)
+- MVI: `presentation/screens/chat/ChatUiState.kt` (with `PendingAttachment.kt` beside it),
+  `presentation/screens/chat/ChatIntent.kt`, `presentation/screens/chat/ChatEffect.kt`
+- `presentation/screens/chat/ChatViewModel.kt`
+- Use cases `domain/usecase/message/{GetMessagesUseCase, SendMessageUseCase}.kt` (others noted)
 - `data/repository/MessageRepositoryImpl.kt`
 - `data/repository/MediaRepositoryImpl.kt`
 - `data/remote/firebase/FirestoreService.kt` (message methods)
@@ -74,6 +74,7 @@ sealed interface ChatIntent : UiIntent {
     data object ClearForward : ChatIntent
     data object ClearError : ChatIntent
     data class DownloadMedia(val item: MediaItem) : ChatIntent
+    data class ViewerDownload(val item: MediaItem) : ChatIntent
     data class CancelUpload(val messageId: String, val itemId: String) : ChatIntent
     data class CancelDownload(val itemId: String) : ChatIntent
     data class ToggleAttachment(val uri: Uri, val kind: String) : ChatIntent
@@ -109,329 +110,62 @@ sealed interface ChatEffect : UiEffect {
 
 ## 2. ChatViewModel
 
-`presentation/viewmodel/ChatViewModel.kt` - the full MVI orchestration:
+`presentation/screens/chat/ChatViewModel.kt` (655 lines) - the MVI orchestration. The ViewModel changed a
+great deal since 0.1.13.1 (feature-flag gating, clips, a different typing scheme), so it is walked
+through here with refs rather than copied. `path:line` refs are relative to
+`app/src/main/java/com/example/messenger/`.
+
+- Class and wiring (`:62`-`:85`): `@HiltViewModel`, extends `MviViewModel<ChatUiState, ChatIntent,
+  ChatEffect>`; 20 injected collaborators including the three message use cases, `IMediaRepository`,
+  `IClipRepository`, the two recorders, `VoiceDraftStore`, `ClipPlaybackController` and
+  `FeatureFlags`. Constants (`:101`-`:111`): `PAGE_SIZE = 100`, `TYPING_HEARTBEAT_MS = 3000`,
+  `TYPING_STOP_DELAY_MS = 2000`, `LAST_SEEN_TICK_MS = 60_000`, `HIGHLIGHT_MS = 2500`,
+  `MAX_JUMP_PAGES = 50`, `JUMP_PAGE_TIMEOUT_MS = 2000`.
+- `init` (`:113`): reads `conversationId`, `partnerId`, `partnerName` and the seeded avatar from
+  `SavedStateHandle` (`:87`-`:91`), seeds the display state, starts `observePartnerAlias`,
+  `observePartnerAvatar` (sets `partnerDeleted`), `observeTransfers`, `observeRecording` and
+  `observeVoiceDraft`, records the partner as recently opened, and - when a conversation id is present
+  - `loadMessages`, `syncMessages`, `markConversationRead`, `observePartnerPresence` and `observeTyping`.
+- `handleIntent` (`:190`): first `requiredFlag(intent)` (`:230`) and `featureFlags.refuses(flag)`
+  (`:191`-`:192`), then a `when` over every `ChatIntent` (`:193`-`:227`). See the feature-flag table in
+  [[Chat and Messaging]].
+- Messages: `loadMessages` (`:429`) collects the `Resource` stream; on the first non-empty success it
+  resolves `firstUnreadMessageId` once and flattens `Message.Media` items into `conversationMedia`
+  (`:437`-`:457`). `syncMessages` (`:419`) collects the Firestore refresh and swallows errors.
+  `loadOlder` / `loadOlderPage` (`:366`-`:385`) fetch a page and set `hasMoreOlder = fetched >= PAGE_SIZE`.
+  `jumpToMessage` (`:387`) loops `loadOlderPage` under a per-page `withTimeoutOrNull` and a guard of
+  `MAX_JUMP_PAGES`, then highlights for 2.5 s or emits "Original message not found".
+- Reading and presence: `onMessagesSeen` (`:467`) marks each message once via `markedAsReadIds`;
+  `observePartnerPresence` (`:485`) combines presence with a 60 s `tickerFlow` (`:501`);
+  `observeTyping` (`:515`) fills `typingUsernames` / `isPartnerTyping`.
+- Typing (outgoing): `onTextChanged` (`:530`) starts a heartbeat loop calling `typingService.setTyping`
+  every 3 s while the user types and restarts a 2 s idle job that calls `stopTyping` (`:555`), which cancels
+  both and clears the node; blank input clears at once.
+- Sending: `toggleAttachment` (`:568`) / `addAttachment` (`:581`) edit `pendingAttachments`;
+  `sendMessage` (`:589`) routes to `sendMediaMessage` (`:610`) when attachments exist, otherwise stops
+  typing, sets `isSending` and collects `sendMessageUseCase`; `deleteMessage` (`:627`) emits
+  `ChatEffect.ShowError` on failure.
+- Clips: `startRecording` (`:257`), `lockRecording` (`:273`), `cancelRecording` (`:277`),
+  `interruptRecording` (`:282`), `finishRecording` (`:287`), `sendRecording` (`:304`) and `playClip`
+  (`:326`); `observeRecording` (`:338`) and `observeVoiceDraft` (`:347`). Covered in
+  [[Voice Messages - Code]] and [[Video Messages - Code]].
+- `onCleared` (`:646`): cancels the typing jobs, calls `typingService.clearTypingNow` and interrupts both
+  recorders so the microphone and camera are released.
+
+A flavour of the gating, the only part worth quoting - the intent-to-flag map starts like this
+(`:230`-`:234`):
 
 ```kotlin
-@HiltViewModel
-class ChatViewModel @Inject constructor(
-    private val sendMessageUseCase: SendMessageUseCase,
-    private val getMessagesUseCase: GetMessagesUseCase,
-    private val syncMessagesUseCase: SyncMessagesUseCase,
-    private val loadOlderMessagesUseCase: LoadOlderMessagesUseCase,
-    private val markMessageAsReadUseCase: MarkMessageAsReadUseCase,
-    private val markConversationAsReadUseCase: MarkConversationAsReadUseCase,
-    private val deleteMessageUseCase: DeleteMessageUseCase,
-    private val observeUserPresenceUseCase: ObserveUserPresenceUseCase,
-    private val observeTypingUseCase: ObserveTypingUseCase,
-    private val typingService: ITypingService,
-    private val mediaRepository: IMediaRepository,
-    private val userRepository: IUserRepository,
-    firebaseAuthService: FirebaseAuthService,
-    savedStateHandle: SavedStateHandle,
-) : MviViewModel<ChatUiState, ChatIntent, ChatEffect>(initialState = ChatUiState()) {
-
-    val conversationId: String = savedStateHandle.get<String>("conversationId") ?: ""
-    private val partnerId: String = savedStateHandle.get<String>("partnerId") ?: ""
-    private val partnerName: String = savedStateHandle.get<String>("partnerName") ?: ""
-    private val seededAvatarUrl: String? =
-        savedStateHandle.get<String>("partnerAvatarUrl")?.takeIf { it.isNotBlank() }
-
-    private var typingJob: Job? = null
-    private var typingClearJob: Job? = null
-    private var highlightClearJob: Job? = null
-    private val markedAsReadIds = mutableSetOf<String>()
-
-    private companion object {
-        const val TAG = "ChatViewModel"
-        const val PAGE_SIZE = 100L
-        const val TYPING_DEBOUNCE_MS = 500L
-        const val TYPING_TTL_MS = 5000L
-        const val LAST_SEEN_TICK_MS = 60_000L
-        const val HIGHLIGHT_MS = 2500L
-        const val MAX_JUMP_PAGES = 50
-        const val JUMP_PAGE_TIMEOUT_MS = 2000L
-    }
-
-    init {
-        val currentUserId = firebaseAuthService.getCurrentUserId().orEmpty()
-        setState {
-            copy(
-                currentUserId = currentUserId,
-                partnerUsername = resolveDisplayName(partnerName, null),
-                partnerAvatarUrl = seededAvatarUrl,
-                partnerLastSeenDisplay = DateUtils.formatLastSeen(partnerPresence.lastSeen),
-            )
-        }
-        observePartnerAlias()
-        observePartnerAvatar()
-        observeTransfers()
-        if (conversationId.isNotBlank()) {
-            loadMessages()
-            syncMessages()
-            markConversationRead()
-            if (partnerId.isNotBlank()) observePartnerPresence()
-            observeTyping()
-        }
-    }
-
-    private fun markConversationRead() {
-        viewModelScope.launch { markConversationAsReadUseCase(conversationId) }
-    }
-
-    private fun observePartnerAlias() {
-        if (partnerId.isBlank()) return
-        userRepository.observeContactAliases()
-            .onEach { aliases -> setState { copy(partnerUsername = resolveDisplayName(partnerName, aliases[partnerId])) } }
-            .launchIn(viewModelScope)
-    }
-
-    private fun observePartnerAvatar() {
-        if (partnerId.isBlank()) return
-        userRepository.observeUser(partnerId)
-            .onEach { user -> setState { copy(partnerAvatarUrl = user?.avatarUrl?.takeIf { it.isNotBlank() } ?: partnerAvatarUrl) } }
-            .launchIn(viewModelScope)
-        viewModelScope.launch { userRepository.getUserById(partnerId) }
-    }
-
-    override fun handleIntent(intent: ChatIntent) {
-        when (intent) {
-            is ChatIntent.TextChanged -> onTextChanged(intent.text)
-            is ChatIntent.SendMessage -> sendMessage(intent.text)
-            is ChatIntent.MessagesSeen -> onMessagesSeen(intent.messages)
-            ChatIntent.LoadOlderMessages -> loadOlder()
-            is ChatIntent.DeleteMessage -> deleteMessage(intent.message, intent.forEveryone)
-            is ChatIntent.SetReplyTo -> setState { copy(replyingTo = intent.message) }
-            ChatIntent.ClearReply -> setState { copy(replyingTo = null) }
-            is ChatIntent.JumpToMessage -> jumpToMessage(intent.messageId)
-            is ChatIntent.Forward -> setState { copy(forwardingMessage = intent.message) }
-            ChatIntent.ClearForward -> setState { copy(forwardingMessage = null) }
-            ChatIntent.ClearError -> setState { copy(error = null) }
-            is ChatIntent.DownloadMedia -> mediaRepository.downloadMedia(intent.item)
-            is ChatIntent.CancelUpload -> mediaRepository.cancelUpload(intent.messageId, intent.itemId)
-            is ChatIntent.CancelDownload -> mediaRepository.cancelDownload(intent.itemId)
-            is ChatIntent.ToggleAttachment -> toggleAttachment(intent.uri, intent.kind)
-            is ChatIntent.AddAttachment -> addAttachment(intent.uri, intent.kind)
-            ChatIntent.ClearAttachments -> setState { copy(pendingAttachments = emptyList()) }
-            is ChatIntent.RetryMedia -> mediaRepository.retry(intent.messageId)
-        }
-    }
-
-    private fun loadOlder() {
-        if (currentState.isLoadingOlder || !currentState.hasMoreOlder) return
-        viewModelScope.launch {
-            setState { copy(isLoadingOlder = true) }
-            loadOlderPage()
-            setState { copy(isLoadingOlder = false) }
-        }
-    }
-
-    private suspend fun loadOlderPage(): Int {
-        val result = loadOlderMessagesUseCase(conversationId)
-        val fetched = result.getOrDefault(0)
-        setState { copy(hasMoreOlder = if (result.isSuccess) fetched >= PAGE_SIZE else hasMoreOlder) }
-        return fetched
-    }
-
-    private fun jumpToMessage(messageId: String) {
-        viewModelScope.launch {
-            var guard = 0
-            while (currentState.messages.none { it.id == messageId } &&
-                currentState.hasMoreOlder && guard < MAX_JUMP_PAGES) {
-                guard++
-                val sizeBefore = currentState.messages.size
-                loadOlderPage()
-                withTimeoutOrNull(JUMP_PAGE_TIMEOUT_MS) {
-                    state.first { s -> s.messages.size > sizeBefore || s.messages.any { it.id == messageId } }
-                }
-                if (currentState.messages.size == sizeBefore) break
-            }
-            if (currentState.messages.any { it.id == messageId }) {
-                setState { copy(highlightedMessageId = messageId) }
-                highlightClearJob?.cancel()
-                highlightClearJob = viewModelScope.launch {
-                    delay(HIGHLIGHT_MS)
-                    setState { copy(highlightedMessageId = null) }
-                }
-            } else {
-                emitEffect(ChatEffect.ShowError("Original message not found".toUiText()))
-            }
-        }
-    }
-
-    private fun syncMessages() {
-        viewModelScope.launch {
-            try { syncMessagesUseCase(conversationId).collect { } }
-            catch (e: Exception) { Log.w(TAG, "Message sync stream errored", e) }
-        }
-    }
-
-    private fun loadMessages() {
-        viewModelScope.launch {
-            getMessagesUseCase(conversationId).collect { resource ->
-                when (resource) {
-                    is Resource.Loading -> setState { copy(isLoading = true) }
-                    is Resource.Success -> {
-                        setState {
-                            val resolvedAnchor = if (!unreadAnchorResolved && currentUserId.isNotBlank() && resource.data.isNotEmpty()) {
-                                val anchorId = resource.data.firstOrNull {
-                                    it.senderId != currentUserId && it.status != MessageStatus.READ
-                                }?.id
-                                copy(firstUnreadMessageId = anchorId, unreadAnchorResolved = true)
-                            } else this
-                            val media = resource.data.filterIsInstance<Message.Media>().flatMap { it.items }
-                            resolvedAnchor.copy(isLoading = false, messages = resource.data,
-                                conversationMedia = media, error = null)
-                        }
-                    }
-                    is Resource.Error -> setState { copy(isLoading = false, error = resource.message.toUiText()) }
-                    is Resource.Failure -> setState { copy(isLoading = false, error = resource.exception.message?.toUiText()) }
-                }
-            }
-        }
-    }
-
-    private fun onMessagesSeen(messages: List<Message>) {
-        val me = currentState.currentUserId
-        if (me.isBlank()) return
-        var newlyRead = false
-        messages.forEach { message ->
-            if (markedAsReadIds.add(message.id)) { markAsRead(message); newlyRead = true }
-        }
-        if (newlyRead) markConversationRead()
-    }
-
-    private fun observePartnerPresence() {
-        viewModelScope.launch {
-            val presence = observeUserPresenceUseCase(partnerId).catch { e -> Log.w(TAG, "Presence observer errored", e) }
-            combine(presence, tickerFlow(LAST_SEEN_TICK_MS)) { p, _ -> p }
-                .collect { p ->
-                    setState { copy(partnerPresence = p, partnerLastSeenDisplay = DateUtils.formatLastSeen(p.lastSeen)) }
-                }
-        }
-    }
-
-    private fun tickerFlow(periodMs: Long) = flow {
-        emit(Unit)
-        while (true) { delay(periodMs); emit(Unit) }
-    }
-
-    private fun observeTransfers() {
-        mediaRepository.transfers.onEach { setState { copy(transfers = it) } }.launchIn(viewModelScope)
-    }
-
-    private fun observeTyping() {
-        viewModelScope.launch {
-            observeTypingUseCase(conversationId)
-                .catch { e -> Log.w(TAG, "Typing observer errored", e) }
-                .collect { typingUserIds ->
-                    setState { copy(typingUsernames = typingUserIds.toList(), isPartnerTyping = typingUserIds.isNotEmpty()) }
-                }
-        }
-    }
-
-    private fun onTextChanged(text: String) {
-        typingJob?.cancel()
-        typingClearJob?.cancel()
-        if (text.isBlank()) {
-            viewModelScope.launch { try { typingService.clearTyping(conversationId) } catch (e: Exception) { Log.w(TAG, "Typing clear failed", e) } }
-            return
-        }
-        typingJob = viewModelScope.launch {
-            delay(TYPING_DEBOUNCE_MS)
-            try { typingService.setTyping(conversationId) } catch (e: Exception) { Log.w(TAG, "Typing set failed", e) }
-        }
-        typingClearJob = viewModelScope.launch {
-            delay(TYPING_TTL_MS)
-            try { typingService.clearTyping(conversationId) } catch (e: Exception) { Log.w(TAG, "Typing clear (TTL) failed", e) }
-        }
-    }
-
-    private fun toggleAttachment(uri: Uri, kind: String) {
-        setState {
-            val existing = pendingAttachments.firstOrNull { it.uri == uri }
-            val updated = if (existing != null) pendingAttachments - existing
-                          else pendingAttachments + PendingAttachment(uri, kind)
-            copy(pendingAttachments = updated)
-        }
-    }
-
-    private fun addAttachment(uri: Uri, kind: String) {
-        setState {
-            if (pendingAttachments.any { it.uri == uri }) return@setState this
-            copy(pendingAttachments = pendingAttachments + PendingAttachment(uri, kind))
-        }
-    }
-
-    private fun sendMessage(text: String) {
-        val attachments = currentState.pendingAttachments
-        if (attachments.isNotEmpty()) { sendMediaMessage(text, attachments); return }
-        val replyTo = currentState.replyingTo
-        viewModelScope.launch { typingService.clearTyping(conversationId) }
-        viewModelScope.launch {
-            setState { copy(isSending = true, replyingTo = null) }
-            sendMessageUseCase(conversationId, text, replyTo).collect { resource ->
-                when (resource) {
-                    is Resource.Loading -> {}
-                    is Resource.Success -> setState { copy(isSending = false, error = null) }
-                    is Resource.Error -> setState { copy(isSending = false, error = resource.message.toUiText()) }
-                    is Resource.Failure -> setState { copy(isSending = false, error = resource.exception.message?.toUiText()) }
-                }
-            }
-        }
-    }
-
-    private fun sendMediaMessage(caption: String, attachments: List<PendingAttachment>) {
-        viewModelScope.launch { typingService.clearTyping(conversationId) }
-        mediaRepository.sendMediaMessage(
-            conversationId = conversationId,
-            uris = attachments.map { it.uri.toString() },
-            caption = caption.trim(),
-        )
-        setState { copy(pendingAttachments = emptyList(), replyingTo = null) }
-    }
-
-    private fun markAsRead(message: Message) {
-        viewModelScope.launch { markMessageAsReadUseCase(message) }
-    }
-
-    private fun deleteMessage(message: Message, forEveryone: Boolean) {
-        viewModelScope.launch {
-            deleteMessageUseCase(message, forEveryone).collect { resource ->
-                when (resource) {
-                    is Resource.Error -> emitEffect(ChatEffect.ShowError(resource.message.toUiText()))
-                    is Resource.Failure -> emitEffect(ChatEffect.ShowError(
-                        resource.exception.message?.toUiText() ?: UiText.StringResource(R.string.chat_error_delete_failed)))
-                    else -> {}
-                }
-            }
-        }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        typingJob?.cancel()
-        typingClearJob?.cancel()
-    }
-}
+private fun requiredFlag(intent: ChatIntent): FeatureFlag? = when (intent) {
+    is ChatIntent.SetReplyTo -> FeatureFlag.MESSAGE_REPLY
+    is ChatIntent.JumpToMessage -> FeatureFlag.MESSAGE_REPLY_JUMP
 ```
-
-Notable mechanics (full "why" in [[Chat and Messaging]]):
-
-- `init` reads nav args from `SavedStateHandle`, seeds derived display state, then wires all the
-  streams (messages, sync, presence, typing, transfers, alias/avatar). Everything runs on
-  `viewModelScope`.
-- `loadMessages` collects the `Resource`-wrapped ObjectBox stream; on first non-empty success it
-  resolves the unread anchor once and flattens `Message.Media` items into `conversationMedia`.
-- `observePartnerPresence` `combine`s presence with a 60s `tickerFlow` so "last seen" stays fresh.
-- `onTextChanged` debounces typing (500ms) with a 5s TTL clear.
-- `jumpToMessage` pages backward with a per-page `withTimeoutOrNull`, then highlights for 2.5s.
-- `onCleared` cancels the manual typing jobs.
 
 ---
 
 ## 3. Message use cases
 
-`GetMessageUseCase.kt` (class `GetMessagesUseCase`):
+`GetMessagesUseCase.kt` (class `GetMessagesUseCase`):
 
 ```kotlin
 class GetMessagesUseCase @Inject constructor(

@@ -5,7 +5,7 @@ tags:
 # Асинхронність і реактивність
 
 Кожен асинхронний примітив у застосунку, з властивістю, що змусила зробити цей вибір, і реальним
-місцем виклику. Версія корутин - `1.11.0` (`gradle/libs.versions.toml:28`).
+місцем виклику. Версія корутин - `1.11.0` (`gradle/libs.versions.toml:29`).
 
 ## Flow (холодний) - потік, що виконує роботу на кожного збирача
 
@@ -85,7 +85,7 @@ fun <T> Query<T>.asFlow(): Flow<List<T>> = callbackFlow {
 
 ### Snapshot listener Firestore - `FirestoreService.getRecentMessagesStream`
 
-`data/remote/firebase/FirestoreService.kt:251`. `callbackFlow` обгортає
+`data/remote/firebase/FirestoreService.kt:229`. `callbackFlow` обгортає
 `addSnapshotListener(MetadataChanges.INCLUDE)`:
 
 ```kotlin
@@ -107,9 +107,9 @@ awaitClose { listener.remove() }
 надсилання рендеряться до підтвердження сервера. `close(error)` пропагує збій прослуховування як
 виняток Flow; `awaitClose { listener.remove() }` від'єднує слухача Firestore, коли збирання
 завершується. Потік сирих DTO потім `map`-иться через E2EE-кодек
-(`data/remote/firebase/FirestoreService.kt:281`) - див. [[End-to-End Encryption_UA|Наскрізне шифрування]].
+(`data/remote/firebase/FirestoreService.kt:259`) - див. [[End-to-End Encryption_UA|Наскрізне шифрування]].
 
-`getAllConversations` (`data/remote/firebase/FirestoreService.kt:493`) має ту саму форму і
+`getAllConversations` (`data/remote/firebase/FirestoreService.kt:504`) має ту саму форму і
 додатково виносить id видалених документів та `snapshot.metadata.isFromCache` у значення
 `ConversationSync`.
 
@@ -146,12 +146,12 @@ fun observeConnectionState(): Flow<Boolean> = callbackFlow {
   [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]].
 - Глобальний стан дзвінка - `ActiveCallHolder` (`data/remote/call/ActiveCallHolder.kt:37`) - це
   `object` із `MutableStateFlow<ActiveCall?>`. Foreground-сервіс дзвінка - єдиний писар; UI
-  (`presentation/navigation/graph/MainDisplay.kt:147`, `ActiveCallBar`, `CallViewModel`) - читач.
+  (`presentation/navigation/graph/MainDisplay.kt:152`, `ActiveCallBar`, `CallViewModel`) - читач.
   `StateFlow` пасує, бо "поточний дзвінок" - це стан із визначеним поточним значенням (можливо
   `null`), який читають з багатьох місць. Див. [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]].
 - Режим показу панелі дзвінка - `CallBarPresenter.mode`
   (`presentation/components/call/CallBarPresenter.kt:11`) - це `MutableStateFlow<CallBarMode>`
-  (BAR / HIDDEN / BUBBLE).
+  (BAR / HIDDEN / BUBBLE / VIDEO).
 - Прогрес передавання медіа - `MediaTransferManager.transfers`, повторно відкритий як
   `IMediaRepository.transfers: StateFlow<Map<String, MediaTransfer>>`
   (`data/repository/MediaRepositoryImpl.kt:60`).
@@ -159,9 +159,14 @@ fun observeConnectionState(): Flow<Boolean> = callbackFlow {
   `ClipPlaybackController.state` (`data/media/ClipPlaybackController.kt:111`) - singleton-и рівня
   застосунку, тож композер чату, голосові бульбашки й міні-плеєр на всіх вкладках читають одне
   поточне значення. Див. [[Voice Messages_UA|Голосові повідомлення]].
+- Feature flag-и - `RemoteConfigFeatureFlags.state` (`data/remote/firebase/RemoteConfigFeatureFlags.kt:34`) -
+  це `StateFlow<FeatureFlagState>`, який `publish()` (`:79`) перепризначає після кожного отримання чи
+  активації Remote Config. `StateFlow` пасує, бо кожному читачу (дереву Compose через
+  `LocalFeatureFlags`, ViewModel через `isEnabled`) значення потрібне одразу, ще до будь-якої
+  відповіді мережі. Див. [[Feature Flags and Remote Config_UA|Feature flag-и та Remote Config]].
 
 `_state.update { }` (`presentation/base/mvi/MviViewModel.kt:36`; `ChatsViewModel` робить те саме
-зі своїм `_uiState`, `presentation/viewmodel/ChatsViewModel.kt:67`) - це атомарне оновлення
+зі своїм `_uiState`, `presentation/screens/chats/ChatsViewModel.kt:70`) - це атомарне оновлення
 compare-and-set, що робить конкурентні редьюсери безпечними.
 
 ## SharedFlow проти Channel для одноразових подій
@@ -172,7 +177,7 @@ compare-and-set, що робить конкурентні редьюсери б�
   MVI (`presentation/base/mvi/MviViewModel.kt:22`). Нульовий replay, щоб повернутий екран не спрацював
   ефект знову; буферизований + non-suspending emit, тож `emitEffect` ніколи не блокує.
 - `Channel(Channel.BUFFERED).receiveAsFlow()` для сигналу виходу з екрана дзвінка в `CallViewModel`
-  (`presentation/viewmodel/CallViewModel.kt:51`). `Channel` односпоживчий із гарантованою
+  (`presentation/screens/call/CallViewModel.kt:54`). `Channel` односпоживчий із гарантованою
   доставкою, що відповідає "навігувати геть рівно один раз".
 - `Channel(Channel.CONFLATED)` для переходів присутності в `PresenceManager`
   (`data/presence/PresenceManager.kt:24`). CONFLATED тримає лише останній запитаний стан, тож
@@ -186,39 +191,44 @@ compare-and-set, що робить конкурентні редьюсери б�
   обгортає collect у `flow { }.flowOn(Dispatchers.IO)` (тут IO, бо це керує мережевим
   snapshot-потоком і записує рядки).
 - `combine` для злиття потоків: `ChatViewModel.observePartnerPresence`
-  (`presentation/viewmodel/ChatViewModel.kt:455`) комбінує потік присутності з 60-секундним
+  (`presentation/screens/chat/ChatViewModel.kt:485`) комбінує потік присутності з 60-секундним
   `tickerFlow`, тож напис "останній раз у мережі N хвилин тому" оновлюється за таймером, навіть
   коли сама присутність не змінилася; `FirebasePresenceService.observeMultiplePresence`
-  (`data/service/FirebasePresenceService.kt:30`) комбінує список потоків присутності по
+  (`data/presence/FirebasePresenceService.kt:30`) комбінує список потоків присутності по
   користувачах в єдиний `Map`.
 - `onEach { }.launchIn(scope)` для збирання "запустив і забув" у стан:
-  `ChatViewModel.observePartnerAlias` (`presentation/viewmodel/ChatViewModel.kt:151`) і
-  `observeTransfers` (`presentation/viewmodel/ChatViewModel.kt:479`).
+  `ChatViewModel.observePartnerAlias` (`presentation/screens/chat/ChatViewModel.kt:151`) і
+  `observeTransfers` (`presentation/screens/chat/ChatViewModel.kt:509`).
 - `collectLatest` там, де нове випромінювання має скасувати роботу, розпочату для попереднього:
   `CallForegroundService.observeRemoteStatus`
-  (`data/remote/call/CallForegroundService.kt:352`), `CallViewModel.observeActiveCall`
-  (`presentation/viewmodel/CallViewModel.kt:103`), `SyncCoordinator`
+  (`data/remote/call/CallForegroundService.kt:359`), `CallViewModel.observeActiveCall`
+  (`presentation/screens/call/CallViewModel.kt:106`), `SyncCoordinator`
   (`data/sync/SyncCoordinator.kt:40`).
 - `onStart` / `catch` для обрамлення потоку станом завантаження та обробкою помилок:
   `ChatsViewModel.loadConversations`
-  (`presentation/viewmodel/ChatsViewModel.kt:81`), `GetMessagesUseCase`
-  (`domain/usecase/message/GetMessageUseCase.kt:16`).
+  (`presentation/screens/chats/ChatsViewModel.kt:84`), `GetMessagesUseCase`
+  (`domain/usecase/message/GetMessagesUseCase.kt:16`).
 - `withTimeoutOrNull` для обмеження очікування: `MediaRepositoryImpl.uploadAndSend`
   (`data/repository/MediaRepositoryImpl.kt:180`) обмежує завантаження кількох файлів 35 секундами;
-  `ChatViewModel.jumpToMessage` (`presentation/viewmodel/ChatViewModel.kt:357`) обмежує кожне
+  `ChatViewModel.jumpToMessage` (`presentation/screens/chat/ChatViewModel.kt:387`) обмежує кожне
   завантаження сторінки під час пошуку назад. Голосові кліпи натомість масштабують очікування з
-  розміром файлу: `clipUploadTimeout` (`data/repository/ClipRepositoryImpl.kt:389`) - це 30 с плюс
+  розміром файлу: `clipUploadTimeout` (`data/repository/ClipRepositoryImpl.kt:401`) - це 30 с плюс
   одна секунда на кожні 8000 байтів, а наступний запис у Firestore підтверджується через
   `FirestoreService.sendMessage(..., confirmWithin = 20.seconds)`, що обгортає `write.await()` у
-  `withTimeoutOrNull` (`data/remote/firebase/FirestoreService.kt:152`).
+  `withTimeoutOrNull` (`data/remote/firebase/FirestoreService.kt:130`).
+- `RemoteConfigFeatureFlags.awaitFresh` (`data/remote/firebase/RemoteConfigFeatureFlags.kt:60`) ставить
+  дві межі `withTimeoutOrNull` (1 с на ініціалізацію, 1,5 с на отримання + активацію) навколо `Task`-ів
+  Firebase, перетворених на suspend-виклики через `await()`, тож шляхи вхідного дзвінка й сповіщення
+  чекають свіжого значення прапорця, але не довше миті. `IncomingCallGate.admit`
+  (`data/remote/call/IncomingCallGate.kt:22`) додає 3-секундну межу на відхилення відхиленого дзвінка.
 - Спільний `Deferred` на ключ для дедуплікації паралельної роботи: `InFlight`
-  (`data/repository/ClipRepositoryImpl.kt:392`) тримає один `async(start = CoroutineStart.LAZY)` на
+  (`data/repository/ClipRepositoryImpl.kt:404`) тримає один `async(start = CoroutineStart.LAZY)` на
   id повідомлення, тож дві бульбашки, що просять той самий кліп, завантажують його один раз і обидві
   чекають той самий результат. Запис прибирає себе в `invokeOnCompletion`, тож збій не кешується.
 - `CompletableDeferred`, щоб перетворити колбек слухача на один очікуваний результат:
   `VideoNoteRecorder.Session.result` (`data/media/VideoNoteRecorder.kt:109`) завершується рівно
   один раз асинхронним `VideoRecordEvent.Finalize` від CameraX. `stop` чекає його під
-  `withTimeoutOrNull(5_000)` у `try`/`finally` (`:183`): якщо корутину, що чекає, скасовано
+  `withTimeoutOrNull(5_000)` у `try`/`finally` (`:187`): якщо корутину, що чекає, скасовано
   (ViewModel очищено) або вийшов час, `finally` зберігає кліп як чернетку замість того, щоб його
   загубити. Див. [[Video Messages_UA|Відеоповідомлення]].
 - `withContext(NonCancellable)`, щоб захистити спільний стан від скасування:
@@ -232,7 +242,7 @@ compare-and-set, що робить конкурентні редьюсери б�
 - `viewModelScope` - уся робота ViewModel (`ChatViewModel`, `ChatsViewModel`,
   `AuthViewModel`, `CallViewModel`). Скасовується автоматично в `onCleared`, тож ніщо не переживає
   екран. Ручні хендли `Job` (наприклад `typingHeartbeatJob` / `typingStopJob`,
-  `presentation/viewmodel/ChatViewModel.kt:93`) скасовуються явно для дебаунсу.
+  `presentation/screens/chat/ChatViewModel.kt:94`) скасовуються явно для дебаунсу.
 - `@Singleton`, що володіє власним `CoroutineScope(SupervisorJob() + Dispatchers.IO)` -
   використовується там, де робота має пережити будь-який окремий екран. `MediaRepositoryImpl`
   (`data/repository/MediaRepositoryImpl.kt:57`): завантаження, розпочате з екрана чату, має
@@ -253,7 +263,7 @@ compare-and-set, що робить конкурентні редьюсери б�
   CameraX приходять на головний executor (`ContextCompat.getMainExecutor`), тож кожен перехід
   сесії відбувається в одному потоці.
 - `CoroutineScope(SupervisorJob() + Dispatchers.IO)` всередині `Service` - `CallForegroundService`
-  (`data/remote/call/CallForegroundService.kt:57`) виконує машину станів дзвінка (записи
+  (`data/remote/call/CallForegroundService.kt:58`) виконує машину станів дзвінка (записи
   сигналізації, рінгтони, таймаути) на цьому scope і скасовує його в `onDestroy`
   (`data/remote/call/CallForegroundService.kt:941`) через `scope.coroutineContext[Job]?.cancel()`,
   тож жоден job таймауту не переживає сервіс. Див. [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]].
@@ -261,7 +271,7 @@ compare-and-set, що робить конкурентні редьюсери б�
   (`data/sync/SyncCoordinator.kt:23`) спостерігає за потоком мережі на `Default` і запускає
   WorkManager; легка координація, а не блокуючий IO, звідси `Default`.
 - Ефемерний `CoroutineScope(Dispatchers.IO)` на кожен колбек - `MyFirebaseMessagingService`
-  (`data/remote/firebase/MyFirebaseMessagingService.kt:47`, `:92`). У колбека FCM немає під рукою
+  (`data/remote/firebase/MyFirebaseMessagingService.kt:54`, `:99`). У колбека FCM немає під рукою
   ViewModel чи довгоживучого scope, тож кожне повідомлення розкручує короткоживучий IO-scope, щоб
   зберегти й сповістити. Див. [[Notifications_UA|Сповіщення]].
 
@@ -271,4 +281,4 @@ compare-and-set, що робить конкурентні редьюсери б�
 [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]] -
 [[Presence and Typing_UA|Присутність і набір тексту]] -
 [[End-to-End Encryption_UA|Наскрізне шифрування]] - [[Architecture Overview_UA|Огляд архітектури]] -
-[[Voice Messages_UA|Голосові повідомлення]]
+[[Voice Messages_UA|Голосові повідомлення]] - [[Feature Flags and Remote Config_UA|Feature flag-и та Remote Config]]

@@ -20,7 +20,7 @@ address book behind you whenever someone new writes in. You never wait for the h
 ## Step by step: what happens to the data
 
 1. The screen asks for conversations: `getConversationsUseCase()` -> the repository's
-   `getAllConversations()` (`data/repository/ConversationRepositoryImpl.kt:32`).
+   `getAllConversations()` (`data/repository/ConversationRepositoryImpl.kt:33`).
 
 2. That function starts TWO helpers at once:
    - a local reader that streams rows straight from the ObjectBox notebook to the screen,

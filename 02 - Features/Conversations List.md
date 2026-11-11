@@ -6,7 +6,7 @@ scrolls under the floating top and tab bars.
 
 ## Pieces
 
-- `ChatsViewModel` (`presentation/viewmodel/ChatsViewModel.kt:35`, formerly
+- `ChatsViewModel` (`presentation/screens/chats/ChatsViewModel.kt:37`, formerly
   `ConversationsViewModel`) - plain `ViewModel` with a `MutableStateFlow<ConversationsUiState>`
   (the method-and-StateFlow style, see [[Presentation Layer (MVI)]]).
 - Use cases (`domain/usecase/conversation/`): `GetConversationsUseCase`,
@@ -21,7 +21,7 @@ scrolls under the floating top and tab bars.
 
 ## Loading the list
 
-`loadConversations` (`ChatsViewModel.kt:81`) runs the conversation stream inside `flatMapLatest`
+`loadConversations` (`ChatsViewModel.kt:84`) runs the conversation stream inside `flatMapLatest`
 over auth state, with loading/error framing:
 
 ```kotlin
@@ -53,7 +53,7 @@ observeAuthStateUseCase()
 
 The underlying stream is the local ObjectBox conversation query (offline-first, see
 [[Data Layer]]), refreshed by a Firestore snapshot listener
-(`FirestoreService.getAllConversations`, `data/remote/firebase/FirestoreService.kt:493`) that
+(`FirestoreService.getAllConversations`, `data/remote/firebase/FirestoreService.kt:504`) that
 also reports removed ids and cache state. `onStart` seeds the spinner; `catch` degrades to an
 error state rather than crashing the collect. On every emission the ViewModel fans out to load
 presence and avatars for the participants.
@@ -69,7 +69,7 @@ the inner flow to `flowOf(emptyList())`, which cancels the listener and clears t
 is created and never rewritten. Showing them directly meant a renamed peer never updated and a
 deleted account kept its old name and photo. The list now reads peers from the cached user rows:
 
-- `observeParticipants` (`ChatsViewModel.kt:64`) collects `userRepository.observeCachedUsers()`
+- `observeParticipants` (`ChatsViewModel.kt:67`) collects `userRepository.observeCachedUsers()`
   into `ConversationsUiState.participants`.
 - `ChatsList` (`presentation/screens/chats/ChatsList.kt`) picks the live `participant` for each
   row, falls back to the frozen arrays only until the live value arrives, and computes
@@ -79,16 +79,16 @@ deleted account kept its old name and photo. The list now reads peers from the c
 
 ## Presence and avatars per row
 
-- `observeParticipantPresence` (`ChatsViewModel.kt:155`) cancels any previous `presenceJob`,
+- `observeParticipantPresence` (`ChatsViewModel.kt:158`) cancels any previous `presenceJob`,
   collects the distinct set of other participants'
   `observeUserPresenceUseCase.observeMultiple(...)` (a `combine` of per-user presence flows, see
   [[Presence and Typing]]), and writes a `presenceMap` into state. Cancelling the prior job before
   resubscribing prevents leaking an observer for a stale participant set.
-- `loadParticipantAvatars` (`ChatsViewModel.kt:110`) first seeds avatar URLs already embedded in
+- `loadParticipantAvatars` (`ChatsViewModel.kt:113`) first seeds avatar URLs already embedded in
   the conversation (`participantAvatars`), then fetches any not-yet-known user via
   `userRepository.getUserById`, tracking `fetchedUserIds` so each user is fetched once (a failed
   fetch is retried next time).
-- `observeAliases` (`ChatsViewModel.kt:72`) refreshes and observes contact aliases so a locally
+- `observeAliases` (`ChatsViewModel.kt:75`) refreshes and observes contact aliases so a locally
   renamed contact shows the custom name.
 
 ## Scrolling under the floating bars
@@ -101,37 +101,60 @@ the bar instead of behind it.
 
 ## Creating a conversation
 
-`createConversation(participantId)` (`ChatsViewModel.kt:222`) calls `CreateConversationUseCase`,
+`createConversation(participantId)` (`ChatsViewModel.kt:229`) calls `CreateConversationUseCase`,
 which finds an existing 1:1 conversation (`FirestoreService.findExistingConversation`,
-`FirestoreService.kt:400`) or creates one seeded with `visibleTo = participantIds`
-(`FirestoreService.createConversation`, `:423`). Starting a conversation with a deleted account
-is refused. Search-driven creation happens through `SearchResultsOverlay` (see
+`FirestoreService.kt:411`) or creates one seeded with `visibleTo = participantIds`
+(`FirestoreService.createConversation`, `:434`). Starting a conversation with a deleted account
+is refused in the repository ("Cannot start a conversation with a deleted account",
+`data/repository/ConversationRepositoryImpl.kt:102`-`:104`). Search-driven creation happens through `SearchResultsOverlay` (see
 [[Search and Suggestions]]), which then navigates to the chat.
 
 ## Deletion: for-me vs for-everyone
 
 Three distinct operations, mirrored at the message level in [[Chat and Messaging]]:
 
-- `deleteForMe(conversationId)` (`ChatsViewModel.kt:194`) -> `ClearConversationForMeUseCase` ->
-  `FirestoreService.clearConversationForMe` (`FirestoreService.kt:444`): writes
+- `deleteForMe(conversationId)` (`ChatsViewModel.kt:197`) -> `ClearConversationForMeUseCase` ->
+  `FirestoreService.clearConversationForMe` (`FirestoreService.kt:455`-`:464`): writes
   `clearedAt.{uid} = now` and removes the uid from `visibleTo`. The conversation disappears from
   this user's list and messages before the cutoff are hidden locally (`clearedAtForMe` on
   `ObxConversation`, used as the message cutoff in `MessageRepositoryImpl.cutoffFor`,
   `data/repository/MessageRepositoryImpl.kt:47`). The other participant is unaffected.
-- `deleteForEveryone(conversationId)` (`ChatsViewModel.kt:201`) ->
+- `deleteForEveryone(conversationId)` (`ChatsViewModel.kt:205`) ->
   `DeleteConversationForEveryoneUseCase` -> deletes the conversation document for all
   participants.
-- `deleteConversation(conversationId)` (`ChatsViewModel.kt:176`) -> `DeleteConversationUseCase` ->
-  `FirestoreService.deleteConversation` (`FirestoreService.kt:434`) hard-deletes the document.
+- `deleteConversation(conversationId)` (`ChatsViewModel.kt:179`) -> `DeleteConversationUseCase` ->
+  `FirestoreService.deleteConversation` (`FirestoreService.kt:445`) hard-deletes the document. No
+  composable in `presentation/` calls this ViewModel method; the edit-chats screen reaches the same
+  use case through `EditChatViewModel.deleteSelected` (`presentation/screens/editchat/EditChatViewModel.kt:56`).
 
-`SwipeableConversationRow` surfaces these, plus mark read / mark unread (`ChatsViewModel.kt:208`,
-`:215`), as swipe actions.
+`SwipeableConversationRow` surfaces for-me and for-everyone deletion (for-everyone only on
+one-on-one rows, `isOneOnOne`, `ChatsList.kt:106`), plus mark read / mark unread
+(`ChatsViewModel.kt:213`, `:221`) and Edit, as swipe actions.
 
 ## Refresh and errors
 
-`refresh` (`ChatsViewModel.kt:240`) toggles `isRefreshing` around `syncConversationsUseCase()` (a
-one-shot server pull, `fetchAllConversationsOnce`, `FirestoreService.kt:475`, uses
+`refresh` (`ChatsViewModel.kt:247`) toggles `isRefreshing` around `syncConversationsUseCase()` (a
+one-shot server pull, `fetchAllConversationsOnce`, `FirestoreService.kt:486`, uses
 `Source.SERVER`). `clearError` resets the error field.
+
+## Feature flag
+
+The list's actions are individually switchable (see [[Feature Flags and Remote Config]]):
+`CHAT_LIST_SWIPE_ACTIONS` is the parent of `CHAT_LIST_MARK_READ`, `CHAT_LIST_DELETE`,
+`CHAT_LIST_DELETE_FOR_EVERYONE` and `CHAT_LIST_EDIT`; `CHAT_LIST_PULL_REFRESH` stands alone. Each is
+enforced twice:
+
+- UI: `SwipeableConversationRow` reads `CHAT_LIST_EDIT`, `CHAT_LIST_MARK_READ`, `CHAT_LIST_DELETE`
+  and (on one-on-one rows only) `CHAT_LIST_DELETE_FOR_EVERYONE`
+  (`presentation/components/list/SwipeableConversationRow.kt:77`-`:80`); an action button is shown
+  only if one of its flags is on, and the row cannot be swiped at all when no action remains
+  (`:81`-`:85`). `ChatsList` passes `enabled = pullEnabled` to `pullToRefresh` from
+  `CHAT_LIST_PULL_REFRESH` (`presentation/screens/chats/ChatsList.kt:51`, `:58`).
+- ViewModel: `ChatsViewModel.deleteForMe` (`:198`), `deleteForEveryone` (`:206`), `markAsRead` and
+  `markAsUnread` (`:214`, `:222`, both on `CHAT_LIST_MARK_READ`) and `refresh` (`:248`) return early
+  through `featureFlags.refuses(...)`. `EditChatViewModel.deleteSelected` and `markAllRead`
+  (`EditChatViewModel.kt:57`, `:66`) check `CHAT_LIST_EDIT`. `retry()` and `createConversation`
+  have no flag check.
 
 ## Why this design
 
@@ -164,6 +187,6 @@ flowchart TD
 
 ## Related
 
-[[Chat and Messaging]] - [[Presence and Typing]] - [[Data Layer]] -
+[[Chat and Messaging]] - [[Presence and Typing]] - [[Data Layer]] - [[Feature Flags and Remote Config]] -
 [[Presentation Layer (MVI)]] - [[Navigation]] - [[Search and Suggestions]] - [[Settings]] -
 [[Conversations List - Basic Example]]

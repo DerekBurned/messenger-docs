@@ -1,22 +1,28 @@
 # Messenger documentation - Home
 
 Map of content for the Messenger Android app. Every note is verified against the actual
-source at `D:\StudioProjects\Messenger` (base package `com.example.messenger`,
-single `:app` module). Code references are written as `path:line`; other notes are linked
-with Obsidian wiki-links.
+source of the app repository (a separate, private repository; this vault holds no app code) at
+release 0.2.2.4, commit `d6374fb`, 2026-11-11 (base package `com.example.messenger`, single `:app`
+module plus the repo-root `functions/` Cloud Functions). Code references are written as
+`path:line`, relative to `app/src/main/java/com/example/messenger/` unless the note says otherwise;
+repo-root paths such as `functions/src/index.ts`, `firestore.rules` or `gradle/libs.versions.toml`
+are used as they are. Other notes are linked with Obsidian wiki-links.
 
 This vault documents the code that exists, not the code the spec imagines. When a rationale
 was not recoverable from the source or history, the note says so instead of inventing one.
 
 ## What the app is
 
-A one-to-one messenger (launcher name "Switch", current release 0.1.13.1): phone-number auth,
-real-time text and media chat, voice messages, voice and video calls, presence and typing
-indicators, offline-first local storage, push notifications with inline reply and conversation
-bubbles, account deletion, and optional end-to-end encryption. Kotlin, Jetpack
-Compose UI, MVI presentation, Hilt DI, ObjectBox local persistence, Firebase backend
-(Firestore + Realtime Database + Auth + Storage + Cloud Messaging + Functions), Agora RTC for
-calls.
+A one-to-one messenger (launcher name "Switch", current release 0.2.2.4, versionCode 20204,
+licensed AGPL-3.0-only): phone-number auth that rejects a register/login mismatch, real-time text
+and media chat with swipe-to-reply, voice messages and round video notes, a chat profile with shared
+media, voice and video calls, presence and typing indicators, offline-first local storage, push
+notifications with inline reply and conversation bubbles, account deletion, and end-to-end
+encryption with a recovery code and a multi-epoch key backup. Since 0.1.13.1 it also has remote
+feature switches (Firebase Remote Config, enforced in ViewModels and the call service), Crashlytics,
+and a GitHub Actions pipeline with a coverage gate. Kotlin, Jetpack Compose UI, MVI presentation,
+Hilt DI, ObjectBox local persistence, Firebase backend (Firestore + Realtime Database + Auth +
+Storage + Cloud Messaging + Functions + Remote Config + Crashlytics), Agora RTC for calls.
 
 ## Start here if you are new
 
@@ -41,6 +47,7 @@ Every feature has an "Explained Simply" companion:
 - [[Appearance and Theming - Explained Simply]]
 - [[Voice Messages - Explained Simply]]
 - [[Video Messages - Explained Simply]]
+- [[Chat Profile and Shared Media - Explained Simply]]
 
 ## Architecture
 
@@ -57,20 +64,26 @@ Every feature has an "Explained Simply" companion:
   manual `EntryPoint` used from framework-instantiated components.
 - [[Async and Reactivity]] - Flow vs StateFlow vs SharedFlow, `callbackFlow` bridges,
   dispatcher and scope choices, with the real call site for each.
-- [[Navigation]] - the session gate (`SessionState`), Navigation 3 typed routes, the
-  `NavDisplay` back stack, and how nav arguments reach a ViewModel's `SavedStateHandle`.
+- [[Navigation]] - the session gate (`SessionState`), the encryption-readiness gate, Navigation 3
+  typed routes, the `NavDisplay` back stack, and how nav arguments reach a ViewModel's
+  `SavedStateHandle`.
+- [[Feature Flags and Remote Config]] - how the 62 feature flags are declared, resolved from Firebase
+  Remote Config and the build's off-by-default list, read by the UI, enforced in ViewModels and the
+  call and notification code, and reported to Crashlytics.
 
-Design proposals (researched, not implemented):
+Plans, proposals and history (each note opens with a status line, checked against 0.2.2.4):
 
-- [[Multi-Device Encryption (Research)]] - keeping E2EE working on several devices at once: a
-  shared account keyring wrapped per device, QR linking, and revocation by epoch rotation.
-
-Historical design records (kept for context, not current behaviour):
-
-- [[Paging 3 Integration (Design)]] - Paging 3 shipped on 2026-07-25 and was reverted on
+- [[Multi-Device Encryption (Research)]] - Partial. Keeping E2EE working on several devices at once:
+  the fork fix, per-device push tokens and the multi-epoch keyring shipped; QR linking, a
+  linked-devices screen and revocation did not.
+- [[Test Coverage - Implementation Plan]] - Done. The 2026-10-21 plan for integration, ViewModel and
+  screen tests and a Kover coverage gate.
+- [[Paging 3 Integration (Design)]] - Reverted. Paging 3 shipped on 2026-07-25 and was reverted on
   2026-07-28; lists are plain reactive Flows again.
 - [[File Layout Refactor (refactor-readability)]] and
-  [[File Layout Refactor - Implementation Plan]] - the 2026-08-11 one-subject-per-file refactor.
+  [[File Layout Refactor - Implementation Plan]] - Done. The one-subject-per-file refactor of
+  2026-08-11 to 2026-08-16, with a second layout pass on 2026-10-18; splitting
+  `CallForegroundService.kt` was left undone.
 
 ## Features
 
@@ -89,6 +102,8 @@ Historical design records (kept for context, not current behaviour):
 - [[Video Messages]] - round video notes: CameraX front-camera recording with a circular preview,
   send/draft/discard decided on `Finalize`, video drafts, and a round bubble with inline playback
   and drag-to-seek along its edge.
+- [[Chat Profile and Shared Media]] - the chat partner's profile screen and its shared-media tabs
+  (PR #54), gated by the `partner_profile_shared_media` flag.
 - [[Calls (Voice and Video)]] - Agora RTC, the foreground-service call state machine, the
   active-call bar with swipe/bubble/snap-back gestures, PiP video, screen-on and proximity
   blanking, and call history.
@@ -120,6 +135,7 @@ Each feature also has a `- Code` companion that embeds and explains that feature
 - [[Appearance and Theming - Code]]
 - [[Voice Messages - Code]]
 - [[Video Messages - Code]]
+- [[Chat Profile and Shared Media - Code]]
 
 ## Basic examples
 
@@ -140,6 +156,7 @@ thing.
 - [[Appearance and Theming - Basic Example]]
 - [[Voice Messages - Basic Example]]
 - [[Video Messages - Basic Example]]
+- [[Chat Profile and Shared Media - Basic Example]]
 
 Every feature note also carries a `## Visualization` section with a Mermaid diagram of its core
 data flow.
@@ -147,7 +164,11 @@ data flow.
 ## Reference
 
 - [[Tech Stack and Versions]] - every library and version from `gradle/libs.versions.toml`
-  and `app/build.gradle.kts`, with why it is here.
+  and `app/build.gradle.kts` at release 0.2.2.4, with why it is here, plus the AGPL-3.0-only license.
+- [[Build, CI and Releases]] - the two GitHub Actions workflows, how `gradle.properties` sets the
+  version, how a release is cut, and the exact commands for every kind of test.
+- [[E2E Tests]] - the device end-to-end scenarios that run against the Firebase emulators, and why
+  they are built the way they are.
 
 ## Conventions used in this vault
 

@@ -5,7 +5,7 @@ Snippets are verbatim from the repo.
 
 Files covered:
 - `data/remote/firebase/RealtimeDbService.kt`
-- `data/service/FirebasePresenceService.kt`, `data/service/FirebaseTypingService.kt`
+- `data/presence/FirebasePresenceService.kt`, `data/service/FirebaseTypingService.kt`
 - `data/presence/PresenceManager.kt`, `data/presence/AppLifecycleObserver.kt`
 - `domain/usecase/presence/ObserveUserPresenceUseCase.kt`,
   `domain/usecase/typing/ObserveTypingUseCase.kt`
@@ -193,12 +193,13 @@ class FirebaseTypingService @Inject constructor(
         return now - timestamp.toLong() <= TYPING_STALE_MS
     }
 
-    private companion object { const val TYPING_STALE_MS = 15_000L }
+    private companion object { const val TYPING_STALE_MS = 6_000L }
 }
 ```
 
-`observeTyping` now filters stale nodes by their `timestamp` (15s window) in addition to dropping
-the current user, so a legacy stuck entry self-heals on the reader even without a disconnect.
+`observeTyping` filters stale nodes by their `timestamp` (6s window, twice the sender's 3s heartbeat) in
+addition to dropping the current user, so a stuck entry self-heals on the reader even without a
+disconnect.
 
 ---
 

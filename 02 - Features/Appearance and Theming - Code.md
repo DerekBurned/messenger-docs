@@ -57,7 +57,7 @@ drag can preview instantly without a write:
 }
 ```
 
-## 2. Cold flows -> UI state (`AppearanceViewModel.kt:25`)
+## 2. Cold flows -> UI state (`AppearanceViewModel.kt:28`)
 
 `stateIn` gives the screen a value on its first frame; `WhileSubscribed(5_000)` keeps the DataStore
 reader alive briefly across recompositions/rotation.
@@ -67,6 +67,7 @@ reader alive briefly across recompositions/rotation.
 class AppearanceViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val themePreferenceStore: ThemePreferenceStore,
+    private val featureFlags: FeatureFlags,
 ) : ViewModel() {
 
     val themeMode: StateFlow<ThemeMode> = themePreferenceStore.themeMode
@@ -78,10 +79,11 @@ class AppearanceViewModel @Inject constructor(
 ```
 
 Importing a wallpaper copies the picked file under a new id, adds it to the saved list, then
-selects it (`AppearanceViewModel.kt:81`):
+selects it (`AppearanceViewModel.kt:92`):
 
 ```kotlin
     fun importWallpaper(uri: Uri) {
+        if (featureFlags.refuses(FeatureFlag.APPEARANCE_CUSTOM_WALLPAPER)) return   // flag gate, as in every writer
         viewModelScope.launch(Dispatchers.IO) {                     // file IO off the main thread
             runCatching {
                 val id = System.currentTimeMillis().toString()
@@ -97,7 +99,7 @@ selects it (`AppearanceViewModel.kt:81`):
     }
 ```
 
-## 3. Applying the mode (`Theme.kt:45`)
+## 3. Applying the mode (`Theme.kt:44`)
 
 `MessengerTheme` maps `ThemeMode` to dark/light, selects a `ColorScheme` and token set, builds the
 typography from the text size and font, and provides the tokens and the default content color
@@ -138,7 +140,7 @@ fun MessengerTheme(
 `Text` with no explicit color fell back to Material's default black, invisible in dark theme.
 
 The root reads the persisted settings and feeds them in, so a write re-themes everything
-(`MainActivity.kt:83`):
+(`MainActivity.kt:91`):
 
 ```kotlin
 val themeMode by themePreferenceStore.themeMode
@@ -192,7 +194,7 @@ fun customWallpaperFile(context: Context, backgroundKey: String): File? {
 }
 ```
 
-## 5. Drawing the backdrop (`WallpaperBackground.kt:35`)
+## 5. Drawing the backdrop (`WallpaperBackground.kt:34`)
 
 `WallpaperBackdrop` reads the store through a Hilt `@EntryPoint` (it is a composable, not a
 ViewModel), paints the gradient, overlays a custom image if present, then applies the intensity
@@ -220,7 +222,7 @@ if (scrimAlpha > 0.005f) {
 (In the source the store and the custom file are skipped in `LocalInspectionMode`, so previews
 render the plain gradient.)
 
-The `UiEntryPoints` seam (`di/UiEntryPoints.kt:12`):
+The `UiEntryPoints` seam (`di/UiEntryPoints.kt:13`):
 
 ```kotlin
 @EntryPoint

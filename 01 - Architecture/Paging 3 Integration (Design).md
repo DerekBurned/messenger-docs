@@ -1,11 +1,17 @@
 # Paging 3 Integration (Design)
 
-> Superseded. This design shipped on 2026-07-25 and was reverted on 2026-07-28 (commit `09705fb`):
-> a paged query does not refresh live when a soft-deleted row leaves the `deleted == false`
-> filter. Every list is a reactive `Flow<List<T>>` again; see [[Data Layer]] and
-> [[Async and Reactivity]]. Kept as a historical record only.
-
-Status: approved design, not yet implemented. Date: 2026-07-25.
+> **Status (checked against release 0.2.2.4, 2026-11-11): Reverted.** The design was built in
+> pieces between 2026-07-25 (the `pagedQuery` ObjectBox adapter, `2fb1942`) and 2026-07-27 (paged
+> chat messages, `baa5758`), then taken out: the chat list was restored to non-paged on 2026-07-27
+> (`f4fdd98`) and the remaining Paging 3 code was removed on 2026-07-28 (`09705fb`), because a paged
+> query does not refresh live when a soft-deleted row leaves the `deleted == false` filter.
+> Nothing from this design is in the 0.2.2.4 tree: `gradle/libs.versions.toml` has no `androidx.paging`
+> entry, `app/src` has no `PagingSource`, `LazyPagingItems` or `RemoteMediator`, and the files the
+> design names (`data/local/obx/ObxPagingSource.kt`, `ObxMappers.kt`) do not exist. Lists are
+> reactive `Flow<List<T>>` again (see [[Data Layer]] and [[Async and Reactivity]]); older chat
+> history is fetched on demand through `MessageRepositoryImpl.loadOlderMessages`
+> (`data/repository/MessageRepositoryImpl.kt:151`), which is explicit "load more", not Paging 3.
+> Kept as a historical record only.
 
 This spec introduces Jetpack Paging 3 to replace unbounded list loading across the app.
 It is deliberately kept DB-agnostic so a future move off ObjectBox (see the SQLDelight
@@ -142,7 +148,7 @@ Live sync stream  -->  ObjectBox (drives the same invalidation)
 ## Chat-list feature rework
 
 These features currently assume the full `List<Message>` lives in `ChatUiState`
-(`presentation/viewmodel/ChatViewModel.kt`). They move off it, per [[Presentation Layer (MVI)]]:
+(`presentation/screens/chat/ChatViewModel.kt`). They move off it, per [[Presentation Layer (MVI)]]:
 
 - `conversationMedia` moves to its own lightweight query (`conversationId` and `type == MEDIA`,
   timestamp order) exposed as a small non-paged flow. Media count is far smaller than message

@@ -19,9 +19,11 @@ com.example.messenger
   MessengerApplication.kt   точка входу @HiltAndroidApp
 ```
 
-Кількість файлів на 0.1.13.1 (2026-10-03): `presentation` 254, `data` 101, `domain` 70, `di` 11,
-`util` 10 файлів Kotlin. Зростання від першого підрахунку - здебільшого рефакторинг розкладки
-файлів 2026-08-11 (одна тема на файл) плюс голосові повідомлення, видалення акаунта й шлюз сесії.
+Кількість файлів на релізі 0.2.2.4 (2026-11-11): `presentation` 252, `data` 120, `domain` 77, `di` 12,
+`util` 10 файлів Kotlin, плюс єдиний `MessengerApplication.kt` у корені. Зростання від першого
+підрахунку - здебільшого рефакторинг розкладки файлів 2026-08-11 (одна тема на файл) плюс голосові
+повідомлення, видалення акаунта, шлюз сесії, feature flag-и та робота над шифруванням з кодом
+відновлення. `domain/featureflag/` і `presentation/featureflag/` - нові пакети, див. [[Feature Flags and Remote Config_UA|Feature flag-и та Remote Config]].
 
 ## Правило залежностей
 
@@ -51,8 +53,8 @@ Presentation - екрани Compose спостерігають за `StateFlow<U
 [[Navigation_UA|Навігація]].
 
 Domain - use case з єдиною відповідальністю (`domain/usecase/...`) надають `operator fun invoke`
-і оркеструють репозиторії. Це звичайні класи з конструкторним впровадженням, без залежностей від
-Android. Повні деталі в [[Domain Layer_UA|Доменний шар]].
+і оркеструють репозиторії. Це звичайні класи з конструкторним впровадженням, майже без залежностей від
+Android (кілька винятків перелічено в [[Domain Layer_UA|Доменному шарі]]).
 
 Data - репозиторії реалізують доменні інтерфейси і є єдиним місцем, що торкається ObjectBox,
 Firestore, Realtime Database, Storage чи crypto-кодека. Це точка злиття моделі offline-first:
@@ -62,21 +64,21 @@ Firestore, Realtime Database, Storage чи crypto-кодека. Це точка 
 ## Наскрізний потік даних: надсилання й показ текстового повідомлення
 
 1. UI надсилає `ChatIntent.SendMessage(text)` до `ChatViewModel`
-   (`handleIntent`, `presentation/viewmodel/ChatViewModel.kt:193`).
+   (`handleIntent`, `presentation/screens/chat/ChatViewModel.kt:190`).
 2. ViewModel викликає `SendMessageUseCase`
    (`domain/usecase/message/SendMessageUseCase.kt:17`), який будує `Message.Text` з `UUID`-id та
    `MessageStatus.SENDING`, а потім викликає репозиторій.
 3. `MessageRepositoryImpl.sendMessage` (`data/repository/MessageRepositoryImpl.kt:53`) спершу
    записує повідомлення в ObjectBox (`messageBox.put`), оновлює прев'ю розмови, потім пробує
    запис у Firestore через `FirestoreService.sendMessage`
-   (`data/remote/firebase/FirestoreService.kt:133`). За збою мережі рядок переводиться у `FAILED`
+   (`data/remote/firebase/FirestoreService.kt:111`). За збою мережі рядок переводиться у `FAILED`
    і ставиться повторна спроба в чергу синхронізації.
 4. Повідомлення вже на екрані, бо UI читає холодний потік ObjectBox: `getMessagesStream`
    (`data/repository/MessageRepositoryImpl.kt:34`) повертає `queryFlow { ... }`, який повторно
    випромінює весь список на кожен локальний запис. `put` з кроку 3 запускає повторне
    випромінювання; `GetMessagesUseCase` у ViewModel його збирає і викликає `setState`.
 5. Окремо `observeRecentMessages` / `getRecentMessagesStream`
-   (`data/remote/firebase/FirestoreService.kt:251`) тримає відкритим snapshot listener Firestore
+   (`data/remote/firebase/FirestoreService.kt:229`) тримає відкритим snapshot listener Firestore
    і записує вхідні віддалені рядки в ObjectBox, який знову випромінює в той самий UI-потік.
 
 Головна властивість: шлях читання і шлях запису розв'язані через ObjectBox. UI ніколи не чекає
@@ -88,11 +90,14 @@ Firestore, Realtime Database, Storage чи crypto-кодека. Це точка 
 
 ## Зв'язування під час запуску застосунку
 
-`MessengerApplication` (`MessengerApplication.kt:34`) - це `@HiltAndroidApp` і
+`MessengerApplication` (`MessengerApplication.kt:36`) - це `@HiltAndroidApp` і
 `Configuration.Provider` (він постачає `HiltWorkerFactory`, щоб `@HiltWorker`-воркери отримали
-свої залежності). Його `onCreate` (`MessengerApplication.kt:61`) - це корінь композиції для
-довгоживучого машинного механізму рівня застосунку, весь `@Inject`-ований як singleton:
+свої залежності). Його `onCreate` (`MessengerApplication.kt:69`) - це корінь композиції для
+довгоживучого машинного механізму рівня застосунку, весь `@Inject`-ований як singleton. Найперший
+виклик - `featureFlags.start()`, тож Remote Config завантажується раніше за все інше:
 
+- `FeatureFlags.start()` - запускає цикл отримання/прослуховування Firebase Remote Config, що керує
+  перемикачами функцій (див. [[Feature Flags and Remote Config_UA|Feature flag-и та Remote Config]]).
 - Coil `SingletonImageLoader` з кешем пам'яті на 10% RAM і дисковим кешем на 30 МБ
   (`filesDir/image_cache`, стирається при виході), плюс `VideoFrameDecoder` для мініатюр відео.
 - Обробник неперехоплених винятків за замовчуванням, що логує збій і передає далі попередньому
@@ -103,11 +108,13 @@ Firestore, Realtime Database, Storage чи crypto-кодека. Це точка 
   foreground/background (див. [[Presence and Typing_UA|Присутність і набір тексту]]).
 - `SyncCoordinator.start()` і `SyncManager.schedulePeriodicSync()` - механізм офлайн-синхронізації
   (див. [[Data Layer_UA|Шар даних]]).
-- `FcmTokenSyncer.start()`, `IncomingCallCoordinator.start()`,
-  `TelecomCallManager.registerPhoneAccount()` - обв'язка push та дзвінків.
+- `FcmTokenSyncer.start()`, `CrashlyticsUserSync.start()` (позначає звіти Crashlytics uid
+  поточного користувача), `IncomingCallCoordinator.start()`,
+  `TelecomCallManager.registerPhoneAccount()` - обв'язка push, звітів про збої та дзвінків.
 - `registerMemoryProfiling()` - на API 37+ реєструє `ProfilingTrigger` для OOM і аномалій і логує,
   куди потрапляють результати.
-- `E2eeBootstrap.publishKeys()` - публікує публічний ключ ідентичності цього пристрою (див.
+- `E2eeBootstrap.refresh()` - скидає статус шифрування, якщо змінився uid, і запускає `resolve()`,
+  що завантажує або публікує ключ ідентичності цього пристрою (див.
   [[End-to-End Encryption_UA|Наскрізне шифрування]]).
 
 `MainActivity` встановлює core-splashscreen (`installSplashScreen()`) перед `super.onCreate`,
@@ -125,4 +132,6 @@ scope у [[Async and Reactivity_UA|Асинхронність і реактив�
 [[Presentation Layer (MVI)_UA|Шар представлення (MVI)]] - [[Domain Layer_UA|Доменний шар]] -
 [[Data Layer_UA|Шар даних]] - [[Dependency Injection (Hilt)_UA|Впровадження залежностей (Hilt)]] -
 [[Async and Reactivity_UA|Асинхронність і реактивність]] - [[Navigation_UA|Навігація]] -
-[[Voice Messages_UA|Голосові повідомлення]] - [[Tech Stack and Versions_UA|Технологічний стек і версії]]
+[[Voice Messages_UA|Голосові повідомлення]] - [[Feature Flags and Remote Config_UA|Feature flag-и та Remote Config]] -
+[[Tech Stack and Versions_UA|Технологічний стек і версії]] -
+[[Build, CI and Releases_UA|Збірка, CI і релізи]]

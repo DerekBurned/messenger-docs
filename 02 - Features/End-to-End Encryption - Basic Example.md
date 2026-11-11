@@ -44,8 +44,9 @@ fun encrypt(key: ByteArray, plaintext: ByteArray, aad: ByteArray): ByteArray {
 - The AAD is `messageAad(conversationId, id, senderId, type)` (`data/crypto/CryptoEncoding.kt:3`),
   so a ciphertext cannot be replayed under a different message identity.
 - Real E2EE adds the machinery around the primitives: a per-epoch `PeerKeyRegistry`
-  (`PeerKeyRegistry.kt:14`) so rotation does not break history, Android-Keystore-wrapped identity
-  keys at rest, a one-shot key refetch and then a graceful "cannot be decrypted on this device"
+  (`PeerKeyRegistry.kt:26`) so rotation does not break history, a keyring of identity keys (one per
+  epoch, `IdentityKeyStore.kt:12`) wrapped by the Android Keystore at rest, a Block Store and recovery-code
+  backup with a gate that keeps the app on `KeyRestoreScreen` until the key is `Ready` (`E2eeBootstrap.kt:28`), a one-shot key refetch and then a graceful "cannot be decrypted on this device"
   placeholder instead of a crash, per-file media and voice-clip keys, and safety numbers - all in
   [[End-to-End Encryption]].
 

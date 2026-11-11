@@ -23,7 +23,7 @@ tags:
   виводом у `TextureView`.
 - Мініатюри: Coil 3 `VideoFrameDecoder` (зареєстрований глобально в `MessengerApplication`) на
   локальному файлі.
-- Формат передачі: без змін. `Clip.Video` (`domain/model/voiceMessage/Clip.kt`), тип
+- Формат передачі: без змін. `Clip.Video` (`domain/model/voicemessage/Clip.kt`), тип
   повідомлення `VIDEO_CLIP`, файл `chatMedia/<conversationId>/<messageId>/clip.mp4`;
   `firestore.rules`, `storage.rules`, кодек шифрування й підпис у пуші приймали його ще до цієї
   роботи.
@@ -37,39 +37,39 @@ tags:
   `Recording(conversationId, elapsedMs, started, locked)`.
 - `VideoNoteRecordingOverlay` (`presentation/components/chat/VideoNoteRecordingOverlay.kt:37`) -
   затемнення, кругле `PreviewView`, кільце тривалості; його малює `ChatScreenContent` між
-  списком і полем введення (`presentation/screens/chat/ChatScreenContent.kt:502`).
-- `VideoNoteBubble` (`presentation/screens/chat/VideoNoteBubble.kt:100`) - замінює стару
+  списком і полем введення (`presentation/screens/chat/ChatScreenContent.kt:507`).
+- `VideoNoteBubble` (`presentation/screens/chat/VideoNoteBubble.kt:102`) - замінює стару
   `VideoClipPlaceholder`; викликається з `MessageBubble`
-  (`presentation/screens/chat/MessageBubble.kt:211`).
+  (`presentation/screens/chat/MessageBubble.kt:220`).
 - `ClipPlaybackController.attachVideo` / `detachVideo` (`data/media/ClipPlaybackController.kt:224`,
   `:229`) з `VideoViewStack` (`:73`).
-- `ClipKind` (`domain/model/voiceMessage/ClipKind.kt`) і `ClipRecording`
+- `ClipKind` (`domain/model/voicemessage/ClipKind.kt`) і `ClipRecording`
   (`data/media/VoiceRecorder.kt:55`) - запис, який передається на надсилання або в чернетки,
   голосовий чи відео.
-- `IClipRepository.cachedFile` (`data/repository/ClipRepositoryImpl.kt:132`) - локальний файл
+- `IClipRepository.cachedFile` (`data/repository/ClipRepositoryImpl.kt:138`) - локальний файл
   для мініатюри, без завантаження.
 
 ### Перемикання режиму
 
 Жест `recordGesture` кнопки мікрофона чекає 200 мс після дотику
-(`presentation/components/chat/RecordMicButton.kt:60`, `HOLD_TO_RECORD_MS` на `:121`). Відпускання
+(`presentation/components/chat/RecordGesture.kt:62`, `HOLD_TO_RECORD_MS` на `:123`). Відпускання
 в цьому вікні - це дотик: `ToggleClipMode` перемикає `ChatUiState.clipMode`
-(`presentation/viewmodel/ChatViewModel.kt:219`), іконка плавно змінюється Mic <-> Videocam, а на
-2 с з'являється підказка (`presentation/screens/chat/MessageComposer.kt:263`). Утримання понад
+(`presentation/screens/chat/ChatViewModel.kt:222`), іконка плавно змінюється Mic <-> Videocam, а на
+2 с з'являється підказка (`presentation/screens/chat/MessageComposer.kt:170`-`:174`). Утримання понад
 200 мс запускає запис у поточному режимі. Режим - це стан ViewModel, тому після повторного
 відкриття чату він знову голосовий.
 
 ### Дозволи
 
 Для відео потрібні `CAMERA` і `RECORD_AUDIO` (`recordPermissions`,
-`presentation/screens/chat/ChatScreenWithNav.kt:53`). Відсутні запитуються разом через
+`presentation/screens/chat/ChatScreenWithNav.kt:51`). Відсутні запитуються разом через
 `RequestMultiplePermissions`; діалоги пояснення й "вимкнено, відкрийте Налаштування" показують
-текст про камеру, якщо запит прийшов із режиму відео (`requestedForVideo`, `:130`, `:235`).
+текст про камеру, якщо запит прийшов із режиму відео (`requestedForVideo`, `:108`, `:128`).
 `VideoNoteRecorder.start` перевіряє обидва ще раз і без них відмовляє.
 
 ### Запис
 
-`ChatViewModel.startRecording` (`:227`) ставить на паузу кліп, що грає, і викликає
+`ChatViewModel.startRecording` (`ChatViewModel.kt:257`) ставить на паузу кліп, що грає, і викликає
 `videoNoteRecorder.start(conversationId)` (`VideoNoteRecorder.kt:154`). `start` відмовляє під час
 дзвінка, без дозволів або без `AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE`, потім встановлює
 `Recording(started = false)` і запускає `bindAndRecord` (`:209`):
@@ -113,7 +113,7 @@ tags:
 
 Переривання такі самі, як у голосу: активний `ActiveCallHolder`, `ProcessLifecycleOwner` нижче
 `STARTED`, втрата фокуса, `ChatViewModel.onCleared` і вихід екрана чату з композиції
-(`ChatScreenWithNav.kt:166`, крім змін конфігурації).
+(`ChatScreenWithNav.kt:164`, крім змін конфігурації).
 
 ### Чернетки
 
@@ -124,7 +124,7 @@ tags:
 
 ### Надсилання
 
-`sendRecording` (`ChatViewModel.kt:274`) створює `Clip.Video(durationMs, sizeBytes)` і викликає
+`sendRecording` (`ChatViewModel.kt:304`) створює `Clip.Video(durationMs, sizeBytes)` і викликає
 `clipRepository.sendClip` - той самий outbox, шифрування, тайм-аут завантаження за розміром і
 підтверджений запис у Firestore, що й для голосової нотатки. Максимум 38 MB вкладається в ліміт
 40 MB правила Storage для `clip.*`; 2 хвилини при 1,2 Мбіт/с - це близько 18 MB.
@@ -138,7 +138,7 @@ tags:
   `cachedFile` і малює перший кадр через Coil; без локального файлу (отриманий кліп, ще не
   відтворений) показує градієнт бульбашки.
 - Коли кліп активний і завантажений, складається `VideoNoteSurface` - `TextureView`,
-  під'єднаний до плеєра. ExoPlayer розтягує відео на весь view, тож `centerCropScale` (`:93`)
+  під'єднаний до плеєра. ExoPlayer розтягує відео на весь view, тож `centerCropScale` (`:95`)
   рахує матрицю `setTransform`, яка обрізає кадр 4:3 до квадрата.
 - Кільце на Canvas: білий трек 30%; під час відтворення біла дуга прогресу від 12 години й
   повзунок; під час завантаження чи вивантаження - дуга акцентного кольору з `transfer.progress`.
@@ -146,11 +146,11 @@ tags:
   надсилання, повторити) і ховається під час відтворення.
 - Чипи: тривалість (позиція під час відтворення) з крапкою непрослуханого, і час + статус.
 - Жести (`pointerInput(interactive, isActive)`): під час відтворення дотик у межах 28 dp від
-  кільця (`isOnRing`, `:90`) споживає жест і перемотує на `ringFraction` (`:85`, 0 на 12 годині,
+  кільця (`isOnRing`, `:92`) споживає жест і перемотує на `ringFraction` (`:87`, 0 на 12 годині,
   за годинниковою стрілкою) при кожному русі; будь-який інший дотик чекає відпускання, коротшого
   за тайм-аут довгого натискання, і перемикає відтворення. Перетягування не по кільцю не
   споживаються, тому `SwipeToReply` і `LongPressMessage` працюють далі.
-- Прев'ю контекстного меню передає `interactive = false` і ніколи не створює поверхню (`:266`).
+- Прев'ю контекстного меню передає `interactive = false` і ніколи не створює поверхню (`VideoNoteBubble.kt:272`; виклик прев'ю - `MessageBubble.kt:249`).
 
 ### Відтворення
 
@@ -161,6 +161,25 @@ tags:
 повертає false: її позначено переглянутою, відтворення зупиняється (бульбашка повертається до
 мініатюри) замість переходу до наступної голосової нотатки. Прокручування бульбашки за межі
 екрана від'єднує її поверхню; звук грає далі, а `ClipMiniPlayer` підписує його "Video message".
+
+## Feature flag
+
+Відеонотатки керуються прапорцем `video_notes` (`FeatureFlag.VIDEO_NOTES`), сусіднім до `voice_messages`; див.
+[[Feature Flags and Remote Config_UA|Feature flags і Remote Config]] та [[Voice Messages_UA|Голосові повідомлення]] щодо спільних прапорців запису,
+блокування й відтворення. Точки застосування:
+
+- ViewModel: `ChatViewModel.requiredFlag` відображає `StartRecording` на прапорець поточного режиму кліпа,
+  а `ToggleClipMode` - на прапорець режиму, на який він перемкне; `ClipKind.VIDEO` відображається на
+  `VIDEO_NOTES` (`ChatViewModel.kt:240`, `:242`, `:248`-`:252`), тож із вимкненим прапорцем застарілий UI не
+  може запустити камеру.
+- UI: композер читає `VIDEO_NOTES` поруч із `VOICE_MESSAGES` (`MessageComposer.kt:260`), а
+  `availableClipMode` (`:386`) переводить кнопку на голос, якщо відеонотатки вимкнені, тож дотик, що
+  перемикає голос <-> відео, активний лише коли ввімкнено обидва (`:272`-`:276`).
+- Спільні прапорці стосуються й відеобульбашки: `CLIP_PLAYBACK` і `CLIP_SEEK`
+  (`presentation/screens/chat/VideoNoteBubble.kt:170`-`:171`), `RECORDING_LOCK` (`MessageComposer.kt:287`,
+  `:328`; `ChatViewModel.kt:241`).
+- `remoteconfig.template.json` описує `video_notes` так: вимкнено - композер не може перемкнутися на режим
+  відеонотатки.
 
 ## Чому такий вибір
 
@@ -210,7 +229,7 @@ tags:
 
 ## Пов'язане
 
-[[Voice Messages_UA|Голосові повідомлення]] - [[Chat and Messaging_UA|Чат і повідомлення]] -
+[[Voice Messages_UA|Голосові повідомлення]] - [[Chat and Messaging_UA|Чат і повідомлення]] - [[Feature Flags and Remote Config_UA|Feature flags і Remote Config]] -
 [[Async and Reactivity_UA|Асинхронність і реактивність]] - [[Video Messages]] (англійською) -
 [[Video Messages - Code]] - [[Video Messages - Explained Simply]] -
 [[Video Messages - Basic Example]]
