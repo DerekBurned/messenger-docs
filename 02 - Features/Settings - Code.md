@@ -6,15 +6,15 @@ one piece with real state logic is the persisted theme, shown here in full. Snip
 from the repo.
 
 Files covered:
-- `presentation/screens/ui/theme/ThemeMode.kt`
+- `presentation/theme/ThemeMode.kt`
 - `data/local/prefs/ThemePreferenceStore.kt`
-- `presentation/viewmodel/AppearanceViewModel.kt`
+- `presentation/screens/settings/appearance/AppearanceViewModel.kt`
 
 ---
 
 ## 1. ThemeMode
 
-`presentation/screens/ui/theme/ThemeMode.kt`:
+`presentation/theme/ThemeMode.kt`:
 
 ```kotlin
 enum class ThemeMode {
@@ -60,7 +60,7 @@ process. Writes go through `edit`.
 
 ## 3. AppearanceViewModel
 
-`presentation/viewmodel/AppearanceViewModel.kt` in full:
+`presentation/screens/settings/appearance/AppearanceViewModel.kt` in full:
 
 ```kotlin
 @HiltViewModel
@@ -84,7 +84,7 @@ hot `StateFlow` with an initial value for the first frame; `WhileSubscribed(5_00
 upstream reader alive for 5s after the last subscriber leaves, so a config change does not
 re-open the DataStore reader. `setDarkTheme` writes back on `viewModelScope`. The applied theme is
 consumed at the top of the Compose tree by `MessengerTheme`
-(`presentation/screens/ui/theme/Theme.kt`), which maps `ThemeMode` to a Material 3 light/dark
+(`presentation/theme/Theme.kt`), which maps `ThemeMode` to a Material 3 light/dark
 color scheme. Why each choice was made: [[Settings]].
 
 ---

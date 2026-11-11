@@ -1,8 +1,29 @@
 # Multi-Device Encryption (Research)
 
-Status: research and proposal, nothing implemented. Date: 2026-11-01. Based on the `ai_encrypt`
-branch at `1332cf5` (recovery code, recovery vault, Block Store backup). Builds on
-[[End-to-End Encryption]].
+> **Status (checked against release 0.2.2.4, 2026-11-11): Partial.** Phases 0 and 1 of the plan in
+> section 6 shipped; phases 2 to 4 did not. The work landed on `ai_encrypt` on 2026-11-02 (commits
+> `2a1217a`, `43ccef0`, `69cb8a3`, `c53acbc`, `09f0201`, `7081195`, `f697dc5`, `f11c915`) and reached
+> `main` through PR #79 (merged 2026-11-08). Shipped: the fork fix (`E2eeBootstrap.resolveLocked`
+> creates an identity only when the account has no published keys and no vault, otherwise it goes to
+> `NeedsLink`, `data/crypto/E2eeBootstrap.kt:181` to `:231`); the `Behind` state
+> (`data/crypto/E2eeState.kt:7`); one push token per device (`DeviceRegistry`,
+> `data/device/DeviceRegistry.kt`; owner-only `users/{uid}/devices` rows at `firestore.rules:177`;
+> `functions/src/push.ts:50` skips rows marked revoked (no client writes that status yet) and `functions/src/index.ts:62` fans pushes out per
+> device; logout clears only this device's row); and the multi-epoch keyring
+> (`data/crypto/IdentityKeyring.kt`, `IdentityKeyringCodec.kt`, Block Store keeps up to 50 keys,
+> `data/crypto/BlockStoreIdentityBackup.kt:49`). Not started: device keys and QR linking (no QR or
+> barcode code anywhere in `app/src/main`), a linked-devices screen, revocation, a `Revoked` state, and
+> signed epochs. One Phase 4 fragment exists but is inert: an Ed25519 `AccountSigner`
+> (`data/crypto/model/AccountSigner.kt`) is persisted by the keyring codec
+> (`IdentityKeyringCodec.kt:20` to `:34`), yet nothing signs with it and `firestore.rules` has no
+> `sig` field. Problem 2 in section 8 is only half-closed: device rows are owner-only, but
+> `DeviceRegistry.register` still dual-writes the legacy `users/{uid}.fcmToken`
+> (`data/device/DeviceRegistry.kt:23`), and the users document is still readable by any signed-in
+> user (`firestore.rules:111`, `:112`). The text below is the research as written on 2026-11-01 and
+> was not rewritten to the shipped state.
+
+Research date: 2026-11-01. Based on the `ai_encrypt` branch at `1332cf5` (recovery code, recovery
+vault, Block Store backup). Builds on [[End-to-End Encryption]].
 
 ## Summary
 

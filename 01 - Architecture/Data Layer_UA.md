@@ -8,7 +8,8 @@ tags:
 Agora, crypto-кодека, передавання медіа та ОС. Саме тут забезпечується модель offline-first.
 
 Підпакети: `local/` (ObjectBox + prefs), `remote/` (auth, firebase, call, dto), `crypto/`
-(E2EE), `media/`, `presence/`, `service/`, `repository/`, `sync/`.
+(E2EE), `device/` (рядок реєстру цього пристрою для push), `media/`, `presence/`, `service/`,
+`repository/`, `sync/`.
 
 ## Принцип offline-first
 
@@ -18,7 +19,7 @@ Agora, crypto-кодека, передавання медіа та ОС. Сам�
 2. повторно випромінює локальний потік `Query.asFlow()`, який збирає UI, і лише тоді
 3. пушить у Firestore, відкочуючись до черги синхронізації за збою.
 
-`MessageRepositoryImpl.sendMessage` (`data/repository/MessageRepositoryImpl.kt:52`) - зразок:
+`MessageRepositoryImpl.sendMessage` (`data/repository/MessageRepositoryImpl.kt:53`) - зразок:
 `messageBox.put(...)`, потім `updateConversationPreview`, потім `firestoreService.sendMessage`; за
 збою переводить рядок у `FAILED` і викликає `enqueueRetry`. Сторона читання ніколи не блокується на
 мережі - див. аналіз потоків у [[Async and Reactivity_UA|Асинхронність і реактивність]].
@@ -26,7 +27,7 @@ Agora, crypto-кодека, передавання медіа та ОС. Сам�
 ## Сховище ObjectBox
 
 Версія `5.4.2` (`gradle/libs.versions.toml:16`), обробка анотацій через kapt
-(`app/build.gradle.kts:10`, `:11`). Сутності оголошені по одній на файл у `data/local/obx/`
+(`app/build.gradle.kts:11`; сам плагін ObjectBox - `:12`). Сутності оголошені по одній на файл у `data/local/obx/`
 (`ObxMessage.kt`, `ObxConversation.kt`, `ObxUser.kt`, `ObxRecentContact.kt`, `ObxSyncQueueItem.kt`,
 ...) і генеруються в `MyObjectBox`.
 
@@ -65,8 +66,11 @@ upsert того самого віддаленого id замінює рядок
 
 `data/repository/` (усі `@Singleton`, прив'язані в `di/RepositoryModule.kt`):
 - `MessageRepositoryImpl` (`IMessageRepository`) - локальний потік + send/delete/read + оновлення
-  Firestore + пагінація + злиття зі збереженням стану прочитання (`putPreservingReadState`,
-  `data/repository/MessageRepositoryImpl.kt:178`). Правила видалення пояснено в
+  Firestore + завантаження старіших сторінок (`loadOlderMessages`, `:151`) + одноразові сторінки
+  спільних медіа для профілю чату (`fetchSharedMediaPage`, `:171`, спирається на
+  `FirestoreService.fetchMessagesOfTypes`, `data/remote/firebase/FirestoreService.kt:317`) + злиття
+  зі збереженням стану прочитання (`putPreservingReadState`,
+  `data/repository/MessageRepositoryImpl.kt:190`). Правила видалення пояснено в
   [[Chat and Messaging_UA|Чат і обмін повідомленнями]].
 - `MediaRepositoryImpl` (`IMediaRepository`) - володіє власним scope рівня застосунку для
   завантажень/вивантажень; див. [[Chat and Messaging_UA|Чат і обмін повідомленнями]] та
@@ -100,11 +104,11 @@ BOM `34.10.0` (`gradle/libs.versions.toml:13`) керує версіями Fireb
 
 - `FirestoreService` (`data/remote/firebase/FirestoreService.kt`) - користувачі, розмови й
   підколекція `conversations/{id}/messages`. Читання - це `callbackFlow` зі snapshot listener
-  (`getRecentMessagesStream:251`, `getAllConversations:493`); записи - suspend-методи `Result`, що
+  (`getRecentMessagesStream:229`, `getAllConversations:504`); записи - suspend-методи `Result`, що
   використовують `await()` з `kotlinx-coroutines-play-services`. Він інтегрує E2EE-кодек під час
-  encode/decode. Видалення для всіх встановлює поле `deleted` (`:226`); видалення для себе додає
-  uid у масив `deletedFor` (`:199`); очищення розмови записує `clearedAt.{uid}` і прибирає uid з
-  `visibleTo` (`:453`).
+  encode/decode. Видалення для всіх встановлює поле `deleted` (`:204`); видалення для себе додає
+  uid у масив `deletedFor` (`:177`); очищення розмови записує `clearedAt.{uid}` і прибирає uid з
+  `visibleTo` (`:455`).
 - `RealtimeDbService` (`data/remote/firebase/RealtimeDbService.kt`) - присутність, набір і
   `.info/connected`. Присутність використовує `onDisconnect()`, тож сервер позначає користувача
   офлайн, якщо сокет обірветься (`:52`). Читання - це `callbackFlow` з `ValueEventListener`.
@@ -112,12 +116,21 @@ BOM `34.10.0` (`gradle/libs.versions.toml:13`) керує версіями Fireb
   `MediaTransferManager`).
 - `FirebaseMessagingManager` / `MyFirebaseMessagingService` / `FcmTokenSyncer` - FCM; див.
   [[Notifications_UA|Сповіщення]].
-- `FirebaseCallSignalingService` - сигналізація дзвінків поверх RTDB; див.
+- `FirebaseCallSignalingService` - сигналізація дзвінків поверх RTDB; вона також записує запис
+  `callChannels/<channel>` (абонент, адресат, серверна позначка часу) тим самим мультишляховим
+  оновленням, що й сигнал (`callSignalUpdate`,
+  `data/remote/call/FirebaseCallSignalingService.kt:159`), який функція `getRtcToken` читає, щоб
+  вирішити, кому можна видати токен дзвінка; див.
   [[Calls (Voice and Video)_UA|Дзвінки (голос і відео)]].
+- `RemoteConfigFeatureFlags` і `CrashlyticsUserSync` - клієнт Remote Config за feature flag-ами та
+  хук user id Crashlytics; див. [[Feature Flags and Remote Config_UA|Feature flag-и та Remote Config]].
+- `DeviceRegistry` (`data/device/DeviceRegistry.kt`) - записує рядок цього пристрою (з його
+  FCM-токеном) у `users/<uid>/devices` і очищає токен при виході.
 
-Пакет `data/service/` містить реалізації сервісів присутності/набору
-(`FirebasePresenceService`, `FirebaseTypingService`), що адаптують `RealtimeDbService` до доменних
-інтерфейсів і відфільтровують поточного користувача; див.
+Присутність і набір тексту до доменних інтерфейсів адаптують `FirebasePresenceService` (у
+`data/presence/`, поруч із `PresenceManager` і `AppLifecycleObserver`) та `FirebaseTypingService` (у
+`data/service/`, де також лежать `AndroidSessionCleaner` і `InMemoryAuthFlowGate`); обидва адаптують
+`RealtimeDbService` і відфільтровують поточного користувача; див.
 [[Presence and Typing_UA|Присутність і набір тексту]].
 
 ## DTO та маппери
@@ -133,7 +146,7 @@ BOM `34.10.0` (`gradle/libs.versions.toml:13`) керує версіями Fireb
 
 Коли запис не може дійти до Firestore, репозиторій ставить у чергу `ObxSyncQueueItem`
 (`entityType`, `entityId`, `action`, `timestamp`, `retryCount`) - див. `enqueueRetry`
-(`data/repository/MessageRepositoryImpl.kt:79`). Чергу осушують:
+(`data/repository/MessageRepositoryImpl.kt:80`). Чергу осушують:
 - `SyncCoordinator` (`data/sync/SyncCoordinator.kt`) - `@Singleton`, запущений у
   `MessengerApplication.onCreate`; на власному `Default`-scope він запускає одноразову синхронізацію
   на старті й знову щоразу, коли повертається мережа (`collectLatest` над `INetworkObserver`).
@@ -143,9 +156,9 @@ BOM `34.10.0` (`gradle/libs.versions.toml:13`) керує версіями Fireb
   `SyncAllDataUseCase` і повертає `Result.retry()` за збою, тож WorkManager відкладає повтор.
 - `NetworkObserver` / `INetworkObserver` - Flow зв'язності, який використовує координатор.
 
-`@HiltWorker` потребує `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:135`) і
+`@HiltWorker` потребує `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:167`) і
 `HiltWorkerFactory`, зв'язаного через `MessengerApplication` `Configuration.Provider`
-(`MessengerApplication.kt:140`); інакше WorkManager не може сконструювати воркер із його
+(`MessengerApplication.kt:150`); інакше WorkManager не може сконструювати воркер із його
 залежністю `SyncAllDataUseCase`.
 
 ## Передавання й кешування медіа

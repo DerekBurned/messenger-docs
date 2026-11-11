@@ -1,8 +1,14 @@
 # File Layout Refactor Implementation Plan
 
-> Historical. Executed on 2026-08-11 via PRs #3 and #4 into `develop`. Single-use types stayed in
-> their declaring files, so some files listed below were never created and the `private` to
-> `internal` promotions were dropped. Source paths reflect the plan, not the current tree.
+> **Status (checked against release 0.2.2.4, 2026-11-11): Done.** Tasks 0 to 13 were executed
+> (PR #3, merged 2026-08-12, and PR #4, merged 2026-08-16, into `develop`); the resulting file
+> split is in the current tree. The plan's paths and package names are the plan, not the tree:
+> single-use types stayed in their declaring files, so some files listed below were never created;
+> the `private` to `internal` promotions were dropped; and PR #13 (merged 2026-10-18) later moved
+> ViewModels, UI state, intents and effects into `presentation/screens/<screen>/` and the theme into
+> `presentation/theme/`. The one follow-up the plan names, splitting `CallForegroundService.kt`, is
+> **Not started** (the file is 1,044 lines at 0.2.2.4). See
+> [[File Layout Refactor (refactor-readability)]] for the full status and what changed after.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -662,4 +668,4 @@ Do not merge the PR. Review is the user's call.
 
 ## Follow-up work, not in this plan
 
-`CallForegroundService.kt` still needs its 1003 lines broken up. That is a behavioural refactor requiring testing against real call flows, and belongs on a dedicated branch.
+`CallForegroundService.kt` still needs its 1003 lines broken up (it was 1,044 lines at release 0.2.2.4, so this follow-up is still open). That is a behavioural refactor requiring testing against real call flows, and belongs on a dedicated branch.

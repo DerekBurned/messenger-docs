@@ -44,7 +44,7 @@ The `Query.asFlow()` bridge itself is the inherited `callbackFlow` shape (see
 - The stream is `getMessagesStream` (`data/repository/MessageRepositoryImpl.kt:34`), filtered to
   `deleted = false` and a per-conversation cutoff (`cutoffFor`, `:47`).
 - `sendMessage` (`MessageRepositoryImpl.kt:53`) adds preview updates, a `SyncWorker` retry queue,
-  and read-state preservation on remote refresh (`putPreservingReadState`, `:178`).
+  and read-state preservation on remote refresh (`putPreservingReadState`, `:190`).
 - Real chat layers on top: replies with a capped snippet, backward paging with a per-page
   `withTimeoutOrNull`, grouped media upload with per-item parallelism and failed-item splitting,
   read receipts confirmed only after the server write, and two deletion modes

@@ -1,5 +1,25 @@
 # Test Coverage Implementation Plan
 
+> **Status (checked against release 0.2.2.4, 2026-11-11): Done.** Every test class the plan names
+> exists in the tree: the ObjectBox-backed repository integration tests
+> (`app/src/test/.../data/repository/*IntegrationTest.kt`, seven classes), the ViewModel tests for
+> chat, chats, calls, forward, auth, delete account, change phone, edit chat, edit contact, edit
+> profile, profile, chat profile and safety number, the Robolectric `*ContentTest` screen tests, and
+> the device `KeystoreKeyWrapperTest` (`app/src/androidTest/.../data/crypto/`). The Kover gate is in
+> place: `kover` is applied in `app/build.gradle.kts:13`, the verify rule is `minBound(28)`
+> (`:268` to `:272`), and the CI workflow runs `./gradlew koverVerifyDebug`
+> (`.github/workflows/blank.yml:92`, see [[Build, CI and Releases]]). The two production fixes the plan
+> pins are present (`SendMessageUseCase` rejects blank and over-5000-character text,
+> `domain/usecase/message/SendMessageUseCase.kt:24`, `:29`). The suite has grown well past the
+> plan's baseline of 346 JVM tests: `app/src/test/` now holds 130 Kotlin files and about 854 `@Test`
+> annotations (a grep count, not a test run), and 19 of the 22 concrete ViewModels have a test class.
+> Gaps that remain: `MediaRepositoryImpl` and `ClipRepositoryImpl` have no repository-level test
+> (only helper tests such as `InFlightTest`, `ClipUploadTimeoutTest`, `NextVoiceClipTest`,
+> `StrandedClipsTest`), and the three recovery ViewModels added later (`KeyRestoreViewModel`,
+> `RecoveryCodeViewModel`, `RecoveryPromptViewModel`) are untested. The "Review Focus" and per-task
+> text below is the plan as written on 2026-10-21; its `/verify` and commit-author rules were that
+> session's instructions.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give every layer of the app behaviour-level tests: integration tests for the data layer,

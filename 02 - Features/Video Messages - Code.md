@@ -8,7 +8,7 @@ Files covered:
 - `data/media/VideoNoteRecorder.kt`
 - `data/media/ClipPlaybackController.kt` (video surface)
 - `presentation/screens/chat/VideoNoteBubble.kt`
-- `presentation/components/chat/RecordMicButton.kt` (tap vs hold)
+- `presentation/components/chat/RecordGesture.kt` (tap vs hold)
 
 ---
 
@@ -229,13 +229,13 @@ internal fun isOnRing(x: Float, y: Float, cx: Float, cy: Float, radius: Float, b
 
 `atan2(dx, -dy)` puts 0 at 12 o'clock and grows clockwise. A ring drag consumes every move; this
 only stops the bubble from moving because `SwipeToReply` now refuses to claim an
-already-consumed gesture (`presentation/components/chat/ChatSwipeGestures.kt:103`,
+already-consumed gesture (`presentation/components/chat/ChatSwipeGestures.kt:105`,
 `if (change.isConsumed) break`). Off the ring nothing is consumed until the up, so long press
 and swipe-to-reply still reach the wrappers.
 
 ## 6. Tap or hold on the mic
 
-`presentation/components/chat/RecordMicButton.kt:60`:
+`presentation/components/chat/RecordGesture.kt:62`:
 
 ```kotlin
 val early = withTimeoutOrNull(HOLD_TO_RECORD_MS) {

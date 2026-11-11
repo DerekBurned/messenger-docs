@@ -66,15 +66,15 @@ when (isAuthenticated.collectAsState(false).value) {
 ## How the real code specialises it
 
 - The callback flow is wrapped into a suspend `VerificationResult` seam in `FirebaseAuthService`
-  and driven from `AuthViewModel.sendVerificationCode` (`presentation/viewmodel/AuthViewModel.kt:112`)
-  and `signInWithPhone` (`AuthViewModel.kt:212`), so the UI only ever sees MVI state/effects.
+  and driven from `AuthViewModel.sendVerificationCode` (`presentation/screens/auth/AuthViewModel.kt:37`)
+  and `signInWithPhone` (`AuthViewModel.kt:254`), so the UI only ever sees MVI state/effects.
 - The `verificationId` the textbook keeps in a variable lives in the ViewModel's `AuthUiState`
   and is passed back to the service on each call, so two flows (sign-in and change-phone) can
   never overwrite each other's id.
 - On success the app also bootstraps the session: presence online, sync restart, recent-history
-  backfill and FCM-token sync inside the success branch (`AuthViewModel.kt:212`).
+  backfill and FCM-token sync inside the success branch (`AuthViewModel.kt:263`).
 - The "auth state switches the app" idea is real in `AppNavigation`
-  (`presentation/navigation/graph/AppNavigation.kt:23`), with one refinement: it switches on a
+  (`presentation/navigation/graph/AppNavigation.kt:27`), with one refinement: it switches on a
   resolved `SessionState` (`Resolving` / `SignedOut` / `Active`) rather than the bare
   `currentUser != null`, so the main UI mounts only once the user's Firestore profile is
   confirmed. Login and logout still flip the whole tree with no navigate call.

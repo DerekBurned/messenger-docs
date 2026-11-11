@@ -52,8 +52,8 @@ fun Modifier.pressScale(interaction: InteractionSource, pressed: Float = 0.95f):
 
 ## How the real code specialises it
 
-- The theme composable is `MessengerTheme` (`presentation/screens/ui/theme/Theme.kt:45`), fed the
-  persisted mode, text size and font from the composition root (`MainActivity.kt:91`); it
+- The theme composable is `MessengerTheme` (`presentation/theme/Theme.kt:44`), fed the
+  persisted mode, text size and font from the composition root (`MainActivity.kt:100`); it
   provides `LocalMessengerTokens` (read as `messengerTokens`) and `LocalContentColor`, so plain
   `Text` is readable in both themes.
 - The reactive preference is `ThemePreferenceStore` (`data/local/prefs/ThemePreferenceStore.kt:27`),
@@ -61,8 +61,8 @@ fun Modifier.pressScale(interaction: InteractionSource, pressed: Float = 0.95f):
   position, text size, font and the list of imported wallpapers.
 - The composed modifiers are `pressScale` and `springEnter` in `MotionModifiers.kt`, built on the
   shared `MotionSprings` specs (`presentation/components/common/model/MotionSprings.kt:6`).
-- The wallpaper layer (`WallpaperBackdrop`, `WallpaperBackground.kt:35`) reads the store through a
-  manual Hilt `@EntryPoint` (`UiEntryPoints`, `di/UiEntryPoints.kt:12`) because it is a composable,
+- The wallpaper layer (`WallpaperBackdrop`, `WallpaperBackground.kt:34`) reads the store through a
+  manual Hilt `@EntryPoint` (`UiEntryPoints`, `di/UiEntryPoints.kt:13`) because it is a composable,
   not a ViewModel - full detail in [[Appearance and Theming]].
 
 ## Related

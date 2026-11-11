@@ -13,7 +13,7 @@ WCAG, що стереже читабельність. Усі налаштува�
 
 ## Складові
 
-- `AppearanceViewModel` (`presentation/viewmodel/AppearanceViewModel.kt:25`) - `@HiltViewModel`,
+- `AppearanceViewModel` (`presentation/screens/settings/appearance/AppearanceViewModel.kt:28`) - `@HiltViewModel`,
   віддає `themeMode`, `background`, `intensity`, `barPosition`, `textSize`, `appFont` і `wallpapers`
   як `StateFlow` та дії запису (`setDarkTheme`, `setBackground`, `previewIntensity`,
   `commitIntensity`, `setBarPosition`, `setTextSize`, `setAppFont`, `importWallpaper`,
@@ -21,25 +21,25 @@ WCAG, що стереже читабельність. Усі налаштува�
 - `ThemePreferenceStore` (`data/local/prefs/ThemePreferenceStore.kt:27`) - `@Singleton` над
   `preferencesDataStore("theme_prefs")`, ключі `theme_mode`, `app_background`, `theme_intensity`,
   `bar_position`, `text_size`, `app_font` і `wallpapers_json` (список збережених шпалер).
-- `MessengerTheme` (`presentation/screens/ui/theme/Theme.kt:45`) - відображає `ThemeMode` на
+- `MessengerTheme` (`presentation/theme/Theme.kt:44`) - відображає `ThemeMode` на
   світлу/темну `ColorScheme` і набір токенів, масштабує типографіку за розміром тексту й шрифтом і
   надає `LocalMessengerTokens` та `LocalContentColor`.
-- `AppBackgrounds` (`presentation/screens/ui/theme/AppBackgrounds.kt:8`) - шість градієнтних
+- `AppBackgrounds` (`presentation/theme/AppBackgrounds.kt:8`) - шість градієнтних
   пресетів, `appBackgroundFor`, `CUSTOM_BACKGROUND_PREFIX`, `backgroundKeyFor`, `wallpaperIdOf`,
   `wallpaperFileById` і `customWallpaperFile`.
 - `WallpaperBackdrop` / `WallpaperBackground`
-  (`presentation/components/common/WallpaperBackground.kt:35`, `:89`) - малюють градієнт,
+  (`presentation/components/common/WallpaperBackground.kt:34`, `:88`) - малюють градієнт,
   необов'язкове імпортоване зображення й затемнення інтенсивності за вмістом.
 - `MotionModifiers` (`presentation/components/common/MotionModifiers.kt`) - `Modifier.pressScale`,
   `Modifier.springEnter`; пружини живуть у `MotionSprings`
   (`presentation/components/common/model/MotionSprings.kt:6`).
 - UI: `presentation/screens/settings/appearance/` (`AppearanceScreen`, `WallpaperGrid`,
   `BackgroundTile`, `SavedWallpaperTile`, `RenameWallpaperDialog`, `IntensityCard`,
-  `LabeledSegmented`). Ручний DI-шов: `UiEntryPoints` (`di/UiEntryPoints.kt:12`).
+  `LabeledSegmented`). Ручний DI-шов: `UiEntryPoints` (`di/UiEntryPoints.kt:13`).
 
 ## Режим теми (системна / світла / темна)
 
-`MessengerTheme` (`Theme.kt:45`) перетворює режим на boolean і обирає схему та токени:
+`MessengerTheme` (`Theme.kt:44`) перетворює режим на boolean і обирає схему та токени:
 
 ```kotlin
 val darkTheme = when (themeMode) {
@@ -50,10 +50,10 @@ val darkTheme = when (themeMode) {
 ```
 
 Корінь композиції збирає збережені налаштування й передає їх усередину, тож запис налаштування
-перетемовує все дерево без ручної інвалідації (`MainActivity.kt:83` читає
-`themePreferenceStore.themeMode`, `:91` викликає
+перетемовує все дерево без ручної інвалідації (`MainActivity.kt:91` читає
+`themePreferenceStore.themeMode`, `:100` викликає
 `MessengerTheme(themeMode = themeMode, textSize = textSize, appFont = appFont)`).
-`AppearanceViewModel` пише його через `setDarkTheme` (`AppearanceViewModel.kt:51`). Механіка
+`AppearanceViewModel` пише його через `setDarkTheme` (`AppearanceViewModel.kt:55`). Механіка
 stateIn/DataStore та сама, що в [[Settings_UA|Налаштування]], і стисло показана в
 [[Appearance and Theming - Basic Example]].
 
@@ -61,11 +61,11 @@ stateIn/DataStore та сама, що в [[Settings_UA|Налаштування]
 
 `AppBackgrounds` (`AppBackgrounds.kt:8`) - шість пресетів (`neutral`, `aurora`, `plum`, `teal`,
 `midnight`, `mono`), кожен із темним і світлим списком кольорів. `WallpaperBackdrop`
-(`WallpaperBackground.kt:35`) малює `Brush.verticalGradient(colors)`, обираючи темний чи світлий
+(`WallpaperBackground.kt:65`) малює `Brush.verticalGradient(colors)`, обираючи темний чи світлий
 список за `tokens.isDark`, потім накладає Coil `AsyncImage`, коли ключ фону вказує на імпортовані
 шпалери.
 
-Імпортовані шпалери утворюють бібліотеку. `importWallpaper` (`AppearanceViewModel.kt:81`) копіює
+Імпортовані шпалери утворюють бібліотеку. `importWallpaper` (`AppearanceViewModel.kt:92`) копіює
 обраний `Uri` у `filesDir/wallpapers/wallpaper_<id>.jpg` на `Dispatchers.IO` (id - поточний час),
 додає `SavedWallpaper(id, "Wallpaper N")` у збережений список і обирає його ключем `"custom:<id>"`.
 `renameWallpaper` і `deleteWallpaper` редагують список; видалення обраних шпалер повертає на
@@ -75,7 +75,7 @@ stateIn/DataStore та сама, що в [[Settings_UA|Налаштування]
 ## Інтенсивність фону
 
 Інтенсивність затемнює фон, щоб вміст переднього плану лишався читабельним на строкатих шпалерах.
-`WallpaperBackdrop` обчислює затемнення (`WallpaperBackground.kt:76`):
+`WallpaperBackdrop` обчислює затемнення (`WallpaperBackground.kt:75`):
 
 ```kotlin
 val scrimAlpha = ((1f - intensity) * 0.85f).coerceIn(0f, 1f)
@@ -83,9 +83,23 @@ val scrimAlpha = ((1f - intensity) * 0.85f).coerceIn(0f, 1f)
 
 1.0 - без затемнення, 0.0 - затемнення на 85%; у темному режимі воно чорне, у світлому - біле.
 Повзунок використовує двоетапний запис, тож перетягування плавне, а зберігається лише відпущене
-значення: `previewIntensity` (`AppearanceViewModel.kt:61`) встановлює `MutableStateFlow`
+значення: `previewIntensity` (`AppearanceViewModel.kt:67`) встановлює `MutableStateFlow`
 `liveIntensity`, що `combine`-иться поверх збереженого значення (`ThemePreferenceStore.kt:74`), а
-`commitIntensity` (`:65`) пише його в DataStore.
+`commitIntensity` (`AppearanceViewModel.kt:72`, через
+`ThemePreferenceStore.setIntensity`, `:91`) пише його в DataStore.
+
+### Збережені шпалери лишаються придатними, коли власні шпалери вимкнено
+
+`appearance_custom_wallpaper` раніше ховав плитки збережених шпалер разом із плиткою Add, тож
+користувач не міг обрати шпалери, які вже зберіг, зокрема й ті, що використовувались. Від PR #65 (злито
+2026-11-07, виправляє #10) перемикач ховає лише плитку Add і меню Rename/Delete за довгим натисканням.
+`WallpaperGrid` завжди показує збережені плитки (`customTiles = saved + Add, якщо customEnabled`,
+`presentation/screens/settings/appearance/WallpaperGrid.kt:38`) і передає `editable = customEnabled` у
+кожну `SavedWallpaperTile` (`:68`), де `onLongClick` дорівнює null, а випадне меню не компонується, коли
+воно false (`presentation/screens/settings/appearance/SavedWallpaperTile.kt:50`, `:70`-`:74`, `:101`).
+Вибір збережених шпалер і далі йде через `setBackground`, що обмежується лише батьківським прапорцем
+`appearance_wallpapers`, а `importWallpaper`, `renameWallpaper` і `deleteWallpaper` у ViewModel
+відмовляють, коли власні шпалери вимкнено (`AppearanceViewModel.kt:93`, `:109`, `:115`).
 
 ## Розкладка, розмір тексту й шрифт
 
@@ -130,11 +144,50 @@ val scrimAlpha = ((1f - intensity) * 0.85f).coerceIn(0f, 1f)
 - Сірі плейсхолдери на білому (3.54:1) тепер використовують `OnSurfaceMuted` (4.83:1), а
   `TextLightMuted` змінив альфу з `0x99` на `0xA6`, щоб перевищити 4.5:1 на світлому фоні.
 
+### Прохід по контрасту після виправлення поля входу (PR #39 і PR #44)
+
+Два пізніші проходи розширили набір і виправили знайдене (злито 2026-11-03):
+
+- Новий токен `textOnFieldMuted` (`TextOnFieldMuted`, `presentation/theme/Color.kt:61`, оголошений у
+  `presentation/theme/Tokens.kt:24`) - приглушений колір для вмісту на завжди майже білій заливці поля.
+  Плейсхолдери входу, доріжка кільця OTP і стрілка вибору країни використовували `textMuted`, що в темній
+  темі білий, тож було біле на білому; плейсхолдер композера повідомлень, повідомлення про видаленого
+  співрозмовника та іконка скасування відповіді мали ту саму проблему, а неактивна фішка фільтра вибору
+  медіа використовувала `Color.Gray` (2.69:1).
+- Вторинний текст, що притемнював `textPrimary` чи `textMuted` до 60% або використовував `Color.Gray`,
+  тепер використовує `textMuted` (4.6:1 і краще в обох темах): плейсхолдер і результати пошуку, рядок
+  "код надіслано", `@username` контакту, рядок "був у мережі" профілю, рядок версії налаштувань і
+  порожні стани чатів, контактів та пересилання. Див. `MessengerTextFields.kt`,
+  `SearchResultsOverlay.kt`, `ChatsEmpty.kt` і `MessageComposer.kt` у diff PR #44.
+- Нові тести покривають порожні `MessengerInputField` і `OtpCodeField`, композер, профіль чату та екран
+  налаштувань (`AuthComponentContrastTest`, `ChatComponentContrastTest`, `ProfileScreenContrastTest`,
+  `SettingsScreenContrastTest`, `ListComponentContrastTest` і `CommonComponentContrastTest` в
+  `app/src/androidTest/.../presentation/contrast/`).
+
+Перелік решти збоїв нижче походить із 0.1.13.1 і не перезапускався для 0.2.2.4.
+
 Решта збоїв - палітра аватарів, акцентні токени й кольори надісланої бульбашки, тобто дизайнерські
 рішення, відкладені на потім; голосові бульбашки падають на тих самих спільних токенах, що й
 текстова. Набір запускається через `adb shell am instrument`, ніколи не через
 `connectedDebugAndroidTest` на особистому пристрої (той видаляє застосунок разом із даними й
 ключами).
+
+## Feature flag
+
+Кожен елемент керування вигляду має власний прапорець (див. [[Feature Flags and Remote Config_UA|Feature flags і Remote Config]]):
+`APPEARANCE_DARK_THEME`, `APPEARANCE_BAR_POSITION`, `APPEARANCE_TEXT_SIZE`, `APPEARANCE_FONT`,
+`APPEARANCE_WALLPAPERS` з дочірніми `APPEARANCE_CUSTOM_WALLPAPER` і `APPEARANCE_WALLPAPER_INTENSITY`.
+Вони застосовуються у двох шарах:
+
+- UI: `AppearanceScreen` випускає кожну картку, а також плитку Add і меню перейменування/видалення в
+  `WallpaperGrid`, лише коли її прапорець увімкнено
+  (`presentation/screens/settings/appearance/AppearanceScreen.kt:61`-`:64`, `:74`, `:88`, `:104`, `:132`).
+- ViewModel: кожен запис в `AppearanceViewModel` починається з `featureFlags.refuses(...)`:
+  `setDarkTheme` (`:56`), `setBackground` (`:63`, на `APPEARANCE_WALLPAPERS`), `previewIntensity` і
+  `commitIntensity` (`:68`, `:73`), `setBarPosition` (`:78`), `setTextSize` (`:83`), `setAppFont` (`:88`)
+  і три дії з власними шпалерами (`:93`, `:109`, `:115`).
+
+Вимкнення прапорця лише зупиняє зміни; збережене значення й далі застосовується через `MessengerTheme`.
 
 ## Чому такий дизайн
 
@@ -153,7 +206,7 @@ val scrimAlpha = ((1f - intensity) * 0.85f).coerceIn(0f, 1f)
 
 ## Пов'язане
 
-[[Settings_UA|Налаштування]] - [[Appearance and Theming - Code]] -
+[[Settings_UA|Налаштування]] - [[Feature Flags and Remote Config_UA|Feature flags і Remote Config]] - [[Appearance and Theming - Code]] -
 [[Appearance and Theming - Explained Simply]] - [[Appearance and Theming - Basic Example]] -
 [[Dependency Injection (Hilt)_UA|Впровадження залежностей (Hilt)]] -
 [[Async and Reactivity_UA|Асинхронність і реактивність]] -

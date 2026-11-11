@@ -1,11 +1,26 @@
 # File Layout Refactor - `refactor/readability`
 
-> Historical. Executed on 2026-08-11 via PRs #3 and #4 into `develop`. Single-use types stayed in
-> their declaring files, so some files listed below were never created. Source paths reflect the
-> plan, not the current tree.
+> **Status (checked against release 0.2.2.4, 2026-11-11): Done, with one deliberate deferral.** The
+> one-subject-per-file split shipped in PR #3 (merged 2026-08-12) and PR #4 (merged 2026-08-16),
+> both into `develop`. In the current tree the eight ObjectBox entities, the converters
+> (`data/local/obx/ObxGson.kt` and one file each), the crypto, DTO and theme model types, and the
+> chat, call and navigation composables are all separate files, and `app/objectbox-models/default.json`
+> is unchanged between `0.1.13.1` and `0.2.2.4`. Not done, by design: `CallForegroundService.kt` is
+> still one class (1,044 lines at `data/remote/call/CallForegroundService.kt`) and `Routes.kt` is
+> still one route table (85 lines). The target packages in the mapping tables below are the plan,
+> not the tree: a second layout pass, PR #13 (merged 2026-10-18), moved each screen's ViewModel,
+> state, intent and effect into `presentation/screens/<screen>/` (the plan's `presentation/state/`
+> and `presentation/viewmodel/` no longer exist), moved the theme to `presentation/theme/`,
+> `GalleryItem` / `GalleryFilter` to `data/media/`, `FirebasePresenceService` to `data/presence/`,
+> `ILocalRepository` to `domain/repository/`, and lowercased `domain/model/voicemessage/`; it also
+> moved previews into the `*Content.kt` files and renamed files that did not match their class
+> (`GetMessageUseCase.kt`, `GetConversationUseCase.kt`, `CallBubble.kt`, `SettingsScaffold.kt`,
+> `RecordMicButton.kt`). Single-use types stayed in their declaring files, so some files named
+> below were never created, and the `private` to `internal` promotions were dropped (see the
+> Amendment).
 
 Date: 2026-08-11
-Status: **Shipped** - PR https://github.com/DerekBurned/Messenger/pull/3 into `develop`
+Status: **Done** - PR https://github.com/DerekBurned/Messenger/pull/3 into `develop` (details in the status block at the top)
 Branch: `refactor/readability`
 
 ## Amendment: what actually shipped

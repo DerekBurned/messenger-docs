@@ -18,10 +18,10 @@ tags:
 ## Складові
 
 - Модель: `Message.Clip` (`domain/model/Message.kt:57`) з `Clip`
-  (`domain/model/voiceMessage/Clip.kt:6`): `Clip.Voice` (url, тривалість, розмір, `fileKey`,
+  (`domain/model/voicemessage/Clip.kt:6`): `Clip.Voice` (url, тривалість, розмір, `fileKey`,
   `waveform`) і `Clip.Video`. Кожен підтип має власні `previewLabel` ("Voice message" /
   "Video message"), `fileExtension` (`m4a` / `mp4`) і `maxDurationMs` (голос: 1 година).
-  `ClipKind` (`domain/model/voiceMessage/ClipKind.kt`) називає два види для коду запису.
+  `ClipKind` (`domain/model/voicemessage/ClipKind.kt`) називає два види для коду запису.
 - Запис: `VoiceRecorder` (`data/media/VoiceRecorder.kt:100`), `@Singleton` рівня застосунку,
   обмежений головним потоком, з `StateFlow<VoiceRecordState>`. Готовий запис - це
   `ClipRecording(conversationId, file, durationMs, waveform, kind)` (`:55`).
@@ -33,36 +33,36 @@ tags:
   ExoPlayer, з `StateFlow<ClipPlaybackState>`.
 - Файли: `MediaCache` (`clip_outbox`, `voice_drafts`, `chat_media`) і `MediaFileTransfer`
   (зашифроване вивантаження/завантаження), див. [[Data Layer_UA|Шар даних]].
-- UI: `RecordMicButton.kt` (модифікатор `recordGesture`), `RecordingBar`, `LiveRecordingWaveform`,
+- UI: `RecordGesture.kt` (модифікатор `recordGesture`), `RecordingBar`, `LiveRecordingWaveform`,
   `RecordLockRail`, `VoiceDraftBar`, `VoiceWaveform`, `ReplyQuote` у
   `presentation/components/chat/`; `VoiceBubble` і `MessageComposer` у `presentation/screens/chat/`;
-  `ClipMiniPlayer` (`presentation/components/common/ClipMiniPlayer.kt:64`) з `ClipPlayerViewModel`,
-  змонтований у `MainDisplay` (`presentation/navigation/graph/MainDisplay.kt:620`).
+  `ClipMiniPlayer` (`presentation/components/common/ClipMiniPlayer.kt:66`) з `ClipPlayerViewModel`,
+  змонтований у `MainDisplay` (`presentation/navigation/graph/MainDisplay.kt:634`).
 - Обв'язка: intent-и `ChatIntent`, які обробляє `ChatViewModel` (`StartRecording`, `LockRecording`,
   `CancelRecording`, `FinishRecording`, `InterruptRecording`, `SendVoiceDraft`, `DiscardVoiceDraft`,
   `ToggleClipMode`, `MicPermissionDenied`, `DismissMicPrompt`, `PlayClip`, `SeekClip`, `RetryClip`,
   `CancelClipSend`). Кожен intent запису йде до того рекордера (голос чи відео), що активний.
 - Бекенд: `firestore.rules` (`hasValidClip`), `storage.rules` (`chatMedia/...`) і прев'ю пушу у
-  функції `onMessageCreated` (`CLIP_PREVIEWS`, `functions/src/index.ts:19`).
+  функції `onMessageCreated` (`CLIP_PREVIEWS`, `functions/src/index.ts:33`).
 
 ## Запис
 
 ### Дотик чи утримання
 
 Кнопка мікрофона має `Modifier.recordGesture`
-(`presentation/components/chat/RecordMicButton.kt:31`). Після дотику жест чекає до 200 мс
-(`withTimeoutOrNull(HOLD_TO_RECORD_MS)`, `:60`):
+(`presentation/components/chat/RecordGesture.kt:31`). Після дотику жест чекає до 200 мс
+(`withTimeoutOrNull(HOLD_TO_RECORD_MS)`, `:62`):
 
 - відпущено в цьому вікні -> дотик: `ToggleClipMode` перемикає голос <-> відео, а підказка на 2 с
   пояснює режим; нічого не записується;
 - дотик втрачено в цьому вікні -> нічого не відбувається;
 - ще тримають після 200 мс -> `StartRecording`.
 
-Зміщення пальця міряються в координатах кореня (`positionInRoot`, `:54`), тож жест працює, навіть
+Зміщення пальця міряються в координатах кореня (`positionInRoot`, `:56`), тож жест працює, навіть
 якщо композер зсувається під пальцем. Це був справжній баг: доріжка блокування робила композер
 вищим, мікрофон підстрибував на 57 px при змаху на 120 px, блокування не спрацьовувало, а
 відпускання надсилало нотатку. Тепер доріжку й підказку розміщує `floatAboveEnd`
-(`presentation/screens/chat/MessageComposer.kt:372`) - модифікатор `layout`, що повідомляє розмір
+(`presentation/screens/chat/MessageComposer.kt:395`) - модифікатор `layout`, що повідомляє розмір
 0 x 0, тож плаваючі елементи ніколи не змінюють розмір композера.
 
 ### Рекордер
@@ -82,7 +82,7 @@ tags:
 завершенні рівні стискаються до 50 кошиків (`downsampleWaveform`, `:67`) і нормалізуються за піком
 (`normalizeWaveform`, `:87`), щоб найгучніший кошик мав 100.
 
-`VoiceWaveform` (`presentation/components/chat/VoiceWaveform.kt:28`) також застосовує
+`VoiceWaveform` (`presentation/components/chat/VoiceWaveform.kt:20`) також застосовує
 `normalizeWaveform` до кожної збереженої хвилі перед малюванням. Це виправляє нотатки, записані до
 12.10.2026: старий код перетворював амплітуду лінійно (`amp * 100 / 32767`), тож телефони з тихими
 мікрофонами давали рівні 3-12, які всі лежали на мінімальній висоті смужки 12% і виглядали
@@ -101,7 +101,7 @@ tags:
 
 ### Результати жесту
 
-Вирішує `recordGestureEnd(locked, slidToCancel, released)` (`RecordMicButton.kt:19`):
+Вирішує `recordGestureEnd(locked, slidToCancel, released)` (`RecordGesture.kt:19`):
 
 - змах уліво більше 100 dp -> `CancelRecording`, файл видаляється; напис "Slide to cancel" іде за
   пальцем і тьмяніє з `dragProgress` (`:25`);
@@ -109,7 +109,7 @@ tags:
   (`presentation/components/chat/RecordLockRail.kt:40`) заповнюється знизу до замка, дужка якого
   закривається з тим самим прогресом, а шеврон, що підстрибує, підказує в спокої; потім
   `RecordingBar` показує видалення й стоп, а і стоп, і кнопка надсилання завершують і надсилають
-  (`MessageComposer.kt:257`);
+  (`MessageComposer.kt:200`, `:266`);
 - відпускання -> `FinishRecording` -> `stop(conversationId)` -> надіслати;
 - будь-яке інше завершення жесту (система скасувала дотик) -> `InterruptRecording`, що зберігає
   чернетку.
@@ -118,7 +118,7 @@ tags:
 `visibleTo(conversationId)` (`VoiceRecorder.kt:50`) показує його як `Idle` усім іншим чатам, тож
 заблокований запис у чаті A не можна завершити чи скасувати з чату B. Записи коротші за 500 мс
 відкидаються. `MessageComposer` тримає екран увімкненим, поки записує будь-який рекордер
-(`KeepScreenOn(enabled = recordingActive)`, `:103`).
+(`KeepScreenOn(enabled = recordingActive)`, `:104`).
 
 ## Переривання стають чернетками
 
@@ -132,7 +132,7 @@ tags:
 - досягнуто ліміту в 1 годину (`MEDIA_RECORDER_INFO_MAX_DURATION_REACHED`);
 - жест завершився без відпускання (див. вище);
 - екран чату виходить з композиції не через зміну конфігурації, наприклад при відкритті профілю
-  співрозмовника поверх чату (`presentation/screens/chat/ChatScreenWithNav.kt:166`);
+  співрозмовника поверх чату (`presentation/screens/chat/ChatScreenWithNav.kt:164`);
 - ViewModel чату очищено (`onCleared` -> `interrupt(conversationId)`).
 
 `VoiceDraftStore.save` переносить файл у `filesDir/voice_drafts/<conversationId>.m4a` і пише
@@ -152,7 +152,7 @@ JSON-супровідник `VoiceDraftMeta(durationMs, waveform, kind)` (`Voice
 `sendRecording` будує `Clip.Voice(durationMs, sizeBytes, waveform)` (або `Clip.Video`, див.
 [[Video Messages_UA|Відеоповідомлення]]) і викликає
 `clipRepository.sendClip(conversationId, file, clip, replyTo)`. `sendClip`
-(`ClipRepositoryImpl.kt:82`):
+(`ClipRepositoryImpl.kt:84`):
 
 1. відхиляє кліп, довший за свій ліміт;
 2. переносить файл у `filesDir/clip_outbox/<messageId>.m4a`, пише рядок `Message.Clip` зі статусом
@@ -160,11 +160,11 @@ JSON-супровідник `VoiceDraftMeta(durationMs, waveform, kind)` (`Voice
    "Voice message";
 3. `launchSend` реєструє лінивий `Job` у `sendJobs` і запускає його.
 
-`uploadAndSend` (`:244`):
+`uploadAndSend` (`:249`):
 
 - вивантажує файл з outbox у `chatMedia/<conversationId>/<messageId>/clip.m4a`, шифруючи ключем
   на файл, якщо розмова шифрується, під `withTimeoutOrNull(clipUploadTimeout(size))` - 30 с плюс
-  одна секунда на кожні 8000 байтів (`:389`);
+  одна секунда на кожні 8000 байтів (`:401`);
 - при збої: скасувати й очистити передачу, позначити `FAILED`;
 - при успіху: `updateClip` пише URL і ключ у транзакції ObjectBox, що заново читає рядок і
   повертає `null`, якщо кліп тим часом видалено, - тоді завантажений файл видаляється зі Storage і
@@ -173,8 +173,8 @@ JSON-супровідник `VoiceDraftMeta(durationMs, waveform, kind)` (`Voice
   сервера, стає `FAILED`, а не висить у `SENDING`;
 - позначає `SENT` і переносить файл з outbox у кеш.
 
-Повтор (`RetryClip` -> `retry`, `:195`) атомарно забирає лише `FAILED`, невидалений рядок без живого
-job. Скасування під час вивантаження (`CancelClipSend` -> `cancelSend`, `:213`) скасовує job і
+Повтор (`RetryClip` -> `retry`, `:200`) атомарно забирає лише `FAILED`, невидалений рядок без живого
+job. Скасування під час вивантаження (`CancelClipSend` -> `cancelSend`, `:218`) скасовує job і
 передачу та, якщо кліп ще не пішов, видаляє рядок і файл з outbox.
 
 ## Шифрування
@@ -187,14 +187,14 @@ job. Скасування під час вивантаження (`CancelClipSen
 
 ## Відновлення після смерті процесу
 
-`ClipRepositoryImpl.init` запускає `recoverAfterRestart` (`ClipRepositoryImpl.kt:291`):
+`ClipRepositoryImpl.init` запускає `recoverAfterRestart` (`ClipRepositoryImpl.kt:296`, запускається з `init`, `:76`):
 
 - видаляє застарілі тимчасові файли (`recording_*`, `*.dl`, `*.part`, `*.enc`), старші за цей
   процес;
 - переносить у outbox файли ненадісланих кліпів зі старого кешу;
 - позначає `FAILED` кожен кліп, що лишився `SENDING` з попереднього процесу без живого job
-  (`strandedClipIds`, `ClipRepositoryImpl.kt:366`), тож він показує кнопку повтору;
-- узгоджує outbox (`outboxFate`, `ClipRepositoryImpl.kt:379`): тримає файли рядків
+  (`strandedClipIds`, `ClipRepositoryImpl.kt:372`), тож він показує кнопку повтору;
+- узгоджує outbox (`outboxFate`, `ClipRepositoryImpl.kt:391`): тримає файли рядків
   `SENDING`/`FAILED`, переносить у кеш файли надісланих рядків, прибирає файли без рядка чи з
   видаленим рядком.
 
@@ -209,7 +209,7 @@ job. Скасування під час вивантаження (`CancelClipSen
 завантаження ігнорується.
 
 `play` (`:253`) відмовляє під час дзвінка, вивантажує попередній кліп, показує стан завантаження й
-просить у `clipRepository.ensureLocal(id)` (`ClipRepositoryImpl.kt:112`) файл: копію з outbox, потім
+просить у `clipRepository.ensureLocal(id)` (`ClipRepositoryImpl.kt:118`) файл: копію з outbox, потім
 з кешу, інакше завантаження. Завантаження йдуть через `InFlight`, тож паралельні запити того самого
 кліпу ділять одне завантаження; файл розшифровується `fileKey` і атомарно переміщується на місце.
 Якщо файлу немає, стан фіксує `failedMessageId`, а бульбашка показує значок повтору; помилка плеєра
@@ -226,20 +226,20 @@ job. Скасування під час вивантаження (`CancelClipSen
 Коли кліп закінчується (`onCompleted`, `:319`), він позначається прослуханим (зникає крапка), і -
 лише для голосу (`shouldAutoAdvance`, `:88`) - грає наступний голосовий кліп у тому ж чаті за
 часом, потім за id, від будь-якого відправника, включно з власними й уже прослуханими, і включно з
-тими, що прийшли під час прослуховування (`nextVoiceClipAfter`, `ClipRepositoryImpl.kt:370`). Інакше
+тими, що прийшли під час прослуховування (`nextVoiceClipAfter`, `ClipRepositoryImpl.kt:376`, `:383`). Інакше
 відтворення зупиняється.
 
 `VoiceBubble` (`presentation/screens/chat/VoiceBubble.kt`) показує хвилю з перемотуванням,
 тривалість, крапку непрослуханого, цитату відповіді й одну кнопку дії, обрану `voiceButton(...)`
-(`:60`): скасування надсилання з кільцем прогресу під час вивантаження, кільце під час
+(`:63`): скасування надсилання з кільцем прогресу під час вивантаження, кільце під час
 завантаження, повтор надсилання для власного `FAILED`-кліпу, спінер під час підготовки, повтор
 відтворення після збою, інакше пауза/відтворення. Перетягування хвилі для перемотування більше не
 запускає ще й змах для відповіді: `SwipeToReply` не перехоплює жест, який уже спожив дочірній
-елемент (`presentation/components/chat/ChatSwipeGestures.kt:103`).
+елемент (`presentation/components/chat/ChatSwipeGestures.kt:105`).
 
 `ClipMiniPlayer` живе в корені навігації, тож відтворення триває на всіх вкладках. Має
 відтворення/паузу, закриття, цикл швидкості 1x -> 1.5x -> 2x (`nextClipSpeed`,
-`ClipMiniPlayer.kt:51`), підпис "Voice message" або "Video message" з `ClipPlaybackState.isVideo` і
+`ClipMiniPlayer.kt:53`), підпис "Voice message" або "Video message" з `ClipPlaybackState.isVideo` і
 натискання, що відкриває чат кліпу (`ClipPlayerViewModel.resolveTarget`).
 
 ## Видалення й вихід
@@ -247,7 +247,7 @@ job. Скасування під час вивантаження (`CancelClipSen
 Видалення голосового кліпу для всіх також прибирає його файл зі Storage
 (`DeleteMessageUseCase` -> `clipRepository.deleteRemoteFile`). Кожен пристрій стежить за
 `observeDeletedClipIds` і прибирає свою локальну копію, файл з outbox, job надсилання й передачу
-(`purgeLocal`, `ClipRepositoryImpl.kt:184`); контролер відтворення зупиняється, якщо поточний кліп
+(`purgeLocal`, `ClipRepositoryImpl.kt:189`); контролер відтворення зупиняється, якщо поточний кліп
 видалено. Вихід зупиняє відтворення, скасовує голосовий чи відеозапис, очищає чернетки й стирає
 outbox, чернетки й медіакеш (див. [[Authentication_UA|Автентифікація]]).
 
@@ -256,7 +256,7 @@ outbox, чернетки й медіакеш (див. [[Authentication_UA|Авт
 Натискання мікрофона без `RECORD_AUDIO` (а в режимі відео - без `CAMERA` + `RECORD_AUDIO`)
 показує діалог пояснення, коли Android це дозволяє, інакше запитує відсутні дозволи. Разова
 відмова показує тост; постійна відмова встановлює `micDenied`, і `MicPermissionDialog`
-(`ChatScreenWithNav.kt:295`) пропонує "Open settings" (`ACTION_APPLICATION_DETAILS_SETTINGS`), з
+(`ChatScreenWithNav.kt:296`) пропонує "Open settings" (`ACTION_APPLICATION_DETAILS_SETTINGS`), з
 текстом про камеру, якщо запит прийшов із режиму відео.
 
 ## Мітки, пуші й правила бекенду
@@ -270,6 +270,36 @@ outbox, чернетки й медіакеш (див. [[Authentication_UA|Авт
 - `storage.rules`: `chatMedia/{conversationId}/{messageId}/{fileName}` - читання, запис і видалення
   лише для учасників розмови (крос-сервісний `firestore.get` на розмову), файли кліпів до 40 МБ,
   інші медіа до 100 МБ, `application/octet-stream` або image/video/audio.
+
+## Feature flag
+
+Голосові повідомлення та елементи навколо них вмикаються й вимикаються окремо через Remote Config (див.
+[[Feature Flags and Remote Config_UA|Feature flags і Remote Config]]). Прапорці: `voice_messages`, `recording_lock`, `clip_playback` з
+дочірніми `clip_seek` і `clip_mini_player`, та `clip_playback_speed` під `clip_mini_player`; сусідній
+`video_notes` описано в [[Video Messages_UA|Відеоповідомлення]]. Кожен застосовується і в UI, і у
+ViewModel:
+
+- `VOICE_MESSAGES`: `ChatViewModel.requiredFlag` відображає `StartRecording` (і `ToggleClipMode` на новий
+  режим) на прапорець поточного режиму кліпа (`ChatViewModel.kt:240`, `:242`, `:248`-`:252`), тож
+  вимкнений режим не може почати запис, навіть якщо застарілий UI надішле intent. У композері
+  `availableClipMode` (`MessageComposer.kt:386`) обирає режим, чий прапорець увімкнено, і композер
+  перемикається на нього (`:259`-`:264`); коли голосові й відеонотатки вимкнені обидва, кнопка дії не
+  має жодного жесту запису (`:268`), а підказка перемикання по дотику працює лише коли ввімкнено обидва
+  (`:272`-`:276`).
+- `RECORDING_LOCK`: ковзання вгору для блокування прибирається з жесту (`lockEnabled`,
+  `MessageComposer.kt:287`), рейка блокування не показується (`:328`), а `LockRecording` відхиляється у
+  ViewModel (`ChatViewModel.kt:241`).
+- `CLIP_PLAYBACK`: `PlayClip` відхиляється, якщо цей кліп уже не грає, тож пауза працює завжди
+  (`ChatViewModel.kt:243`); кнопка бульбашки вимкнена, коли прапорець вимкнено (`VoiceBubble.kt:158`).
+- `CLIP_SEEK`: хвилю не можна перемотувати, коли вимкнено (`VoiceBubble.kt:233`), а `SeekClip`
+  відхиляється (`ChatViewModel.kt:244`).
+- `CLIP_MINI_PLAYER`: панель не показується (`MainDisplay.kt:179`), а `ClipPlayerViewModel.resume`
+  відмовляє (`presentation/components/common/ClipPlayerViewModel.kt:37`).
+- `CLIP_PLAYBACK_SPEED`: кнопка швидкості прихована (`ClipMiniPlayer.kt:127`), а
+  `ClipPlayerViewModel.setSpeed` відмовляє (`ClipPlayerViewModel.kt:44`).
+
+Надсилання й отримання ці прапорці не блокують: вхідний кліп усе одно зберігається й показується, лише
+може бути невідтворюваним.
 
 ## Чому такий дизайн
 
@@ -318,5 +348,5 @@ outbox, чернетки й медіакеш (див. [[Authentication_UA|Авт
 [[Video Messages_UA|Відеоповідомлення]] - [[Chat and Messaging_UA|Чат і обмін повідомленнями]] -
 [[End-to-End Encryption_UA|Наскрізне шифрування]] - [[Data Layer_UA|Шар даних]] -
 [[Async and Reactivity_UA|Асинхронність і реактивність]] - [[Notifications_UA|Сповіщення]] -
-[[Authentication_UA|Автентифікація]] - [[Voice Messages - Code]] -
+[[Authentication_UA|Автентифікація]] - [[Feature Flags and Remote Config_UA|Feature flags і Remote Config]] - [[Voice Messages - Code]] -
 [[Voice Messages - Explained Simply]] - [[Voice Messages - Basic Example]]

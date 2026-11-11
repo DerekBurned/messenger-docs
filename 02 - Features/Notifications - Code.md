@@ -34,7 +34,7 @@ class FirebaseMessagingManager @Inject constructor(
 class FcmTokenSyncer @Inject constructor(
     private val auth: FirebaseAuth,
     private val messagingManager: FirebaseMessagingManager,
-    private val firestoreService: FirestoreService,
+    private val deviceRegistry: DeviceRegistry,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastSyncedUid: String? = null
@@ -52,7 +52,8 @@ class FcmTokenSyncer @Inject constructor(
         scope.launch {
             messagingManager.getFcmToken()
                 .onSuccess { token ->
-                    if (firestoreService.updateFcmToken(uid, token).isSuccess) lastSyncedUid = uid
+                    val result = deviceRegistry.register(uid, token)
+                    if (result.isSuccess) lastSyncedUid = uid
                 }
                 .onFailure { e -> Log.w(TAG, "Failed to fetch FCM token", e) }
         }
@@ -61,7 +62,9 @@ class FcmTokenSyncer @Inject constructor(
 }
 ```
 
-`lastSyncedUid` de-dupes repeated syncs for the same user. The token also gets written at login
+`lastSyncedUid` de-dupes repeated syncs for the same user. `DeviceRegistry.register` writes this device's
+row under `users/{uid}/devices/{deviceId}` (and the legacy `fcmToken` field), see [[Notifications]]. The
+token also gets written at login
 (`AuthViewModel.syncFcmTokenForCurrentUser`, [[Authentication - Code]]) and on rotation
 (`MyFirebaseMessagingService.onNewToken`).
 
@@ -81,6 +84,9 @@ interface FcmEntryPoint {
     fun telecomCallManager(): TelecomCallManager
     fun messageRepository(): IMessageRepository
     fun e2eeCodec(): E2eeMessageCodec
+    fun deviceRegistry(): DeviceRegistry
+    fun incomingCallGate(): IncomingCallGate
+    fun featureFlags(): FeatureFlags
 }
 
 class MyFirebaseMessagingService : FirebaseMessagingService() {
@@ -89,9 +95,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
         super.onNewToken(token)
         val currentUid = FirebaseAuth.getInstance().currentUser?.uid ?: return
-        val firestoreService = EntryPointAccessors.fromApplication(applicationContext, FcmEntryPoint::class.java).firestoreService()
+        val deviceRegistry = EntryPointAccessors.fromApplication(applicationContext, FcmEntryPoint::class.java).deviceRegistry()
         CoroutineScope(Dispatchers.IO).launch {
-            firestoreService.updateFcmToken(currentUid, token).onFailure { Log.w(TAG, "token sync failed", it) }
+            deviceRegistry.register(currentUid, token).onFailure { Log.w(TAG, "token sync failed", it) }
         }
     }
 
@@ -129,6 +135,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                     .onFailure { Log.w(TAG, "persistIncomingMessage failed", it) }
             }
             if (CurrentConversationHolder.isOpen(conversationId)) return@launch
+            entryPoint.featureFlags().awaitFresh()   // so flag-dependent notification pieces use current values
             val clipLabel = clipLabelFor(
                 msgType = resolved.type,
                 voice = getString(R.string.clip_voice_message),
@@ -136,7 +143,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             )
             val body = when {
                 clipLabel != null -> clipLabel
-                message is Message.Text && message.text != E2eeMessageCodec.UNDECRYPTABLE_TEXT -> message.text
+                message is Message.Text && !E2eeMessageCodec.isPlaceholder(message.text) -> message.text
                 message is Message.Media -> message.caption.ifBlank { "Media" }
                 dto.enc == 1 -> "New message"
                 else -> data["preview"].orEmpty()
@@ -154,6 +161,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         val calleeId = FirebaseAuth.getInstance().currentUser?.uid.orEmpty()
         if (callId.isBlank() || channelName.isBlank() || calleeId.isBlank()) return
         if (ActiveCallHolder.snapshot()?.callId == callId) return
+        val gate = EntryPointAccessors.fromApplication(applicationContext, FcmEntryPoint::class.java).incomingCallGate()
+        if (!runBlocking { gate.admit(calleeId, callId) }) return   // declines the call when the `calls` flag is off
         val intent = CallForegroundService.incomingIntent(this, callId, callerId, calleeId,
             channelName, callerName, "")
         ContextCompat.startForegroundService(this, intent)
@@ -269,20 +278,23 @@ class NotificationReplyReceiver : BroadcastReceiver() {
         val conversationId = intent.getStringExtra(EXTRA_CONVERSATION_ID).orEmpty()
         if (conversationId.isBlank()) return
         val appContext = context.applicationContext
-        if (intent.action == ACTION_OPEN_BUBBLE) {
-            ChatNotifier.openAsBubble(appContext, conversationId,
-                intent.getStringExtra(EXTRA_PARTNER_ID).orEmpty(),
-                intent.getStringExtra(EXTRA_PARTNER_NAME).orEmpty())
-            return
-        }
         val entry = EntryPointAccessors.fromApplication(appContext, NotificationActionEntryPoint::class.java)
         val pending = goAsync()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         scope.launch {
             try {
+                val featureFlags = entry.featureFlags()
+                featureFlags.awaitFresh()
                 when (intent.action) {
-                    ACTION_REPLY -> handleReply(appContext, intent, conversationId, entry)
-                    ACTION_MARK_READ -> handleMarkRead(appContext, conversationId, entry)
+                    ACTION_OPEN_BUBBLE -> ChatNotifier.openAsBubble(appContext, conversationId,
+                        intent.getStringExtra(EXTRA_PARTNER_ID).orEmpty(),
+                        intent.getStringExtra(EXTRA_PARTNER_NAME).orEmpty())
+                    ACTION_REPLY ->
+                        if (featureFlags.isEnabled(FeatureFlag.NOTIFICATION_INLINE_REPLY)) handleReply(appContext, intent, conversationId, entry)
+                        else ChatNotifier.refresh(appContext, conversationId)
+                    ACTION_MARK_READ ->
+                        if (featureFlags.isEnabled(FeatureFlag.NOTIFICATION_MARK_READ)) handleMarkRead(appContext, conversationId, entry)
+                        else ChatNotifier.refresh(appContext, conversationId)
                 }
             } catch (t: Throwable) { Log.w(TAG, "notification action failed", t) }
             finally { pending.finish() }
@@ -347,10 +359,11 @@ private fun post(context: Context, conversationId: String, state: ConvState, sil
         .setPriority(NotificationCompat.PRIORITY_HIGH).setAutoCancel(true).setSilent(silent)
         .setGroup(GROUP_KEY).setShortcutId(conversationId).setLocusId(LocusIdCompat(conversationId))
         .setContentIntent(contentIntent(context, conversationId, state))
-        .addAction(replyAction(context, conversationId, state))
-        .addAction(openInWindowAction(context, conversationId, state))
-        .addAction(markReadAction(context, conversationId))
-    if (expandAsBubble) builder.setBubbleMetadata(bubbleMetadata(context, conversationId, state))
+    if (flagOn(context, FeatureFlag.NOTIFICATION_INLINE_REPLY)) builder.addAction(replyAction(context, conversationId, state))
+    val bubblesEnabled = flagOn(context, FeatureFlag.NOTIFICATION_BUBBLES)
+    if (bubblesEnabled) builder.addAction(openInWindowAction(context, conversationId, state))
+    if (flagOn(context, FeatureFlag.NOTIFICATION_MARK_READ)) builder.addAction(markReadAction(context, conversationId))
+    if (expandAsBubble && bubblesEnabled) builder.setBubbleMetadata(bubbleMetadata(context, conversationId, state))
     nm.notify(conversationId.hashCode(), builder.build())
 }
 

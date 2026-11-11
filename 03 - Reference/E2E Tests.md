@@ -1,15 +1,17 @@
 # E2E Tests
 
 End-to-end tests that drive the real app on the tablet against the Firebase emulators on this
-computer. They were added in PR #79 on `ai_encrypt` (2026-11-07) after a real E2EE bug: after a
+computer. They were added in PR #79 on `ai_encrypt` (merged 2026-11-08) after a real E2EE bug: after a
 reinstall, your own messages showed "Message cannot be decrypted on this device" while your
 partner could read everything. This note covers why they're built the way they are. How to run
-them is in `app/src/test/RUNNING_TESTS.md`.
+them is in `app/src/test/RUNNING_TESTS.md` and in [[Build, CI and Releases]]. Paths below are
+repo-root relative.
 
 ## Why they work this way
 
-- **Device only.** The owner's rule is no Android emulator on this PC, which is short on memory.
-  Local runs use the Lenovo tablet (serial `HVA6F12F`).
+- **Device only.** The development PC is short on memory (`app/src/test/RUNNING_TESTS.md` says it
+  cannot hold Android Studio and a Gradle build at once), so local runs use a physical tablet. The
+  serial defaults to `HVA6F12F` and can be overridden with `E2E_SERIAL` (`e2e/run.sh:7`).
 - **A separate app.** The `e2e` build type installs as `com.example.messenger.e2e`, beside the
   real app. `testBuildType = "e2e"`, so no instrumented test can uninstall the real app or wipe its
   E2EE keys.
@@ -37,10 +39,14 @@ them is in `app/src/test/RUNNING_TESTS.md`.
 | `reinstall-blockstore` | Block Store restores the key after a reinstall, with no prompt |
 | `reinstall-code` | A recovery code restores every message after a reinstall |
 | `reinstall-fresh` | Start fresh locks old messages, and new ones read both ways |
-| `second-device` | A reset on another device prompts this one, and its code restores everything. Written, not yet run on the tablet |
 | `stale-key` | Fails until issue #78 is fixed, so `all` leaves it out |
 
-Every reinstall check reports `partner read x/y, app read x/y, stored encrypted x/y`.
+Every reinstall check reports `partner read x/y, app read x/y, stored encrypted x/y`
+(`app/src/androidTest/.../e2e/ReinstallScenario.kt:83`).
+
+An earlier draft of this note also listed a `second-device` scenario. It is not in `e2e/run.sh`
+(`ALL=(...)` at `e2e/run.sh:15`, plus `stale-key`) and there is no such test under
+`app/src/androidTest/` at release 0.2.2.4, so it is left out here.
 
 ## What they found
 
@@ -58,11 +64,20 @@ Every reinstall check reports `partner read x/y, app read x/y, stored encrypted 
 
 - The tablet locks during long builds, and `run.sh` then stops with "device is locked". Turning
   on Stay awake in Developer options avoids it.
-- Block Store survives uninstall and holds at most 16 entries, so every scenario clears it first.
+- Block Store survives uninstall, so every scenario clears it first (`clearBlockStore`,
+  `app/src/androidTest/.../e2e/E2eRules.kt:11`). The 16-entry limit quoted in the first version of
+  this note comes from the Block Store documentation cited in
+  [[Multi-Device Encryption (Research)]]; it is not checkable from the source.
 - Don't touch the tablet during a run. A stray tap once opened Telegram mid-test.
 
 ## Follow-ups
 
 #80 (run in CI), #81 (upgrade between releases), #82 (FLAG_SECURE on the recovery code screen).
+The issue tracker is not part of the repository, so these numbers could not be re-checked; the
+CI workflows at 0.2.2.4 do not run the end-to-end scenarios (`.github/workflows/blank.yml`,
+`release.yml`).
 
-Related: [[Multi-Device Encryption (Research)]], [[Tech Stack and Versions]].
+## Related
+
+[[Multi-Device Encryption (Research)]] - [[Tech Stack and Versions]] - [[Build, CI and Releases]] -
+[[End-to-End Encryption]]

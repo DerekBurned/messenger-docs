@@ -4,9 +4,9 @@ Companion to [[Voice Messages]]. The source of the voice pipeline, block by bloc
 copied from the repo with `Log` lines trimmed; the "why" lives in the main note.
 
 Files covered:
-- `domain/model/voiceMessage/Clip.kt`
+- `domain/model/voicemessage/Clip.kt`
 - `data/media/VoiceRecorder.kt`, `data/media/VoiceDraftStore.kt`
-- `presentation/components/chat/RecordMicButton.kt`, `LiveRecordingWaveform.kt`, `VoiceWaveform.kt`
+- `presentation/components/chat/RecordGesture.kt`, `LiveRecordingWaveform.kt`, `VoiceWaveform.kt`
 - `data/repository/ClipRepositoryImpl.kt`
 - `data/media/ClipPlaybackController.kt`
 - `presentation/screens/chat/VoiceBubble.kt`
@@ -16,7 +16,7 @@ Files covered:
 
 ## 1. The clip model
 
-`domain/model/voiceMessage/Clip.kt`:
+`domain/model/voicemessage/Clip.kt`:
 
 ```kotlin
 @Immutable
@@ -228,7 +228,7 @@ sidecar written before video support has no `kind` and decodes as `VOICE`
 
 ## 4. The gesture
 
-`presentation/components/chat/RecordMicButton.kt`:
+`presentation/components/chat/RecordGesture.kt`:
 
 ```kotlin
 internal enum class RecordGestureEnd { SEND, DRAFT, NONE }
@@ -258,14 +258,14 @@ val downInRoot = down.position + origin[0]
 val delta = change.position + origin[0] - downInRoot
 ```
 
-`dragProgress(distancePx, thresholdPx)` (`RecordMicButton.kt:25`) turns the same delta into the
+`dragProgress(distancePx, thresholdPx)` (`RecordGesture.kt:25`) turns the same delta into the
 0..1 progress that drives the lock rail's padlock and the fading "Slide to cancel" label.
 
 ---
 
 ## 5. Sending
 
-`ClipRepositoryImpl.uploadAndSend` (`data/repository/ClipRepositoryImpl.kt:244`):
+`ClipRepositoryImpl.uploadAndSend` (`data/repository/ClipRepositoryImpl.kt:48`):
 
 ```kotlin
 val encryptActive = codec.isEncryptable(message.conversationId)

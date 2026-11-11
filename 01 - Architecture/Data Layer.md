@@ -5,7 +5,8 @@ Firebase, Agora, the crypto codec, media transfer, and the OS. It is where the o
 model is enforced.
 
 Sub-packages: `local/` (ObjectBox + prefs), `remote/` (auth, firebase, call, dto), `crypto/`
-(E2EE), `media/`, `presence/`, `service/`, `repository/`, `sync/`.
+(E2EE), `device/` (this device's registry row for push), `media/`, `presence/`, `service/`,
+`repository/`, `sync/`.
 
 ## Offline-first principle
 
@@ -15,7 +16,7 @@ refresher behind it. A repository method typically:
 2. re-emits the local `Query.asFlow()` stream the UI is collecting, and only then
 3. pushes to Firestore, falling back to the sync queue on failure.
 
-`MessageRepositoryImpl.sendMessage` (`data/repository/MessageRepositoryImpl.kt:52`) is the
+`MessageRepositoryImpl.sendMessage` (`data/repository/MessageRepositoryImpl.kt:53`) is the
 model: `messageBox.put(...)` then `updateConversationPreview` then
 `firestoreService.sendMessage`; on failure it flips the row to `FAILED` and calls
 `enqueueRetry`. The read side never blocks on the network - see the flow analysis in
@@ -24,7 +25,7 @@ model: `messageBox.put(...)` then `updateConversationPreview` then
 ## ObjectBox persistence
 
 Version `5.4.2` (`gradle/libs.versions.toml:16`), annotation processing via kapt
-(`app/build.gradle.kts:10`, `:11`). Entities are declared one per file in `data/local/obx/`
+(`app/build.gradle.kts:11`; the ObjectBox plugin itself is `:12`). Entities are declared one per file in `data/local/obx/`
 (`ObxMessage.kt`, `ObxConversation.kt`, `ObxUser.kt`, `ObxRecentContact.kt`, `ObxSyncQueueItem.kt`,
 ...) and generated into `MyObjectBox`.
 
@@ -63,8 +64,10 @@ models.
 
 `data/repository/` (all `@Singleton`, bound in `di/RepositoryModule.kt`):
 - `MessageRepositoryImpl` (`IMessageRepository`) - local stream + send/delete/read + Firestore
-  refresh + paging + read-state-preserving merge (`putPreservingReadState`,
-  `data/repository/MessageRepositoryImpl.kt:178`). Delete rules explained in
+  refresh + older-page loading (`loadOlderMessages`, `:151`) + one-off shared-media pages for the
+  chat profile (`fetchSharedMediaPage`, `:171`, backed by `FirestoreService.fetchMessagesOfTypes`,
+  `data/remote/firebase/FirestoreService.kt:317`) + read-state-preserving merge
+  (`putPreservingReadState`, `data/repository/MessageRepositoryImpl.kt:190`). Delete rules explained in
   [[Chat and Messaging]].
 - `MediaRepositoryImpl` (`IMediaRepository`) - owns its own app-scoped coroutine scope for
   uploads/downloads; see [[Chat and Messaging]] and the scope rationale in
@@ -97,22 +100,32 @@ SDKs and return domain types / `Result`.
 
 - `FirestoreService` (`data/remote/firebase/FirestoreService.kt`) - users, conversations, and
   the `conversations/{id}/messages` subcollection. Reads are snapshot-listener `callbackFlow`s
-  (`getRecentMessagesStream:251`, `getAllConversations:493`); writes are suspend `Result`
+  (`getRecentMessagesStream:229`, `getAllConversations:504`); writes are suspend `Result`
   methods using `kotlinx-coroutines-play-services` `await()`. It integrates the E2EE codec on
-  encode/decode. Delete-for-everyone sets the `deleted` field (`:226`); delete-for-me adds the
-  uid to a `deletedFor` array (`:199`); clearing a conversation writes `clearedAt.{uid}` and
-  removes the uid from `visibleTo` (`:453`).
+  encode/decode. Delete-for-everyone sets the `deleted` field (`:204`); delete-for-me adds the
+  uid to a `deletedFor` array (`:177`); clearing a conversation writes `clearedAt.{uid}` and
+  removes the uid from `visibleTo` (`:455`).
 - `RealtimeDbService` (`data/remote/firebase/RealtimeDbService.kt`) - presence, typing, and
   `.info/connected`. Presence uses `onDisconnect()` so the server marks a user offline if the
   socket drops (`:52`). Reads are `ValueEventListener` `callbackFlow`s.
 - `FirebaseStorageService` - media upload/download URLs (used by `MediaTransferManager`).
 - `FirebaseMessagingManager` / `MyFirebaseMessagingService` / `FcmTokenSyncer` - FCM; see
   [[Notifications]].
-- `FirebaseCallSignalingService` - call signaling over RTDB; see [[Calls (Voice and Video)]].
+- `FirebaseCallSignalingService` - call signaling over RTDB; it also writes the `callChannels/<channel>`
+  record (caller, callee, server timestamp) in the same multi-path update as the signal
+  (`callSignalUpdate`, `data/remote/call/FirebaseCallSignalingService.kt:159`), which the
+  `getRtcToken` function reads to decide who may receive a call token; see
+  [[Calls (Voice and Video)]].
+- `RemoteConfigFeatureFlags` and `CrashlyticsUserSync` - the Remote Config client behind the feature
+  flags and the Crashlytics user-id hook; see [[Feature Flags and Remote Config]].
+- `DeviceRegistry` (`data/device/DeviceRegistry.kt`) - writes this device's row (with its FCM token)
+  under `users/<uid>/devices` and clears the token on sign-out.
 
-The `data/service/` package holds the presence/typing service implementations
-(`FirebasePresenceService`, `FirebaseTypingService`) that adapt `RealtimeDbService` to the
-domain interfaces and filter out the current user; see [[Presence and Typing]].
+Presence and typing are adapted to the domain interfaces by `FirebasePresenceService` (in
+`data/presence/`, next to `PresenceManager` and `AppLifecycleObserver`) and
+`FirebaseTypingService` (in `data/service/`, which also holds `AndroidSessionCleaner` and
+`InMemoryAuthFlowGate`); both adapt `RealtimeDbService` and filter out the current user. See
+[[Presence and Typing]].
 
 ## DTOs and mappers
 
@@ -127,7 +140,7 @@ also carries `deletedFor` and the `deleted` flag used by the deletion rules.
 
 When a write cannot reach Firestore, the repository enqueues an `ObxSyncQueueItem`
 (`entityType`, `entityId`, `action`, `timestamp`, `retryCount`) - see `enqueueRetry`
-(`data/repository/MessageRepositoryImpl.kt:79`). The queue is drained by:
+(`data/repository/MessageRepositoryImpl.kt:80`). The queue is drained by:
 - `SyncCoordinator` (`data/sync/SyncCoordinator.kt`) - `@Singleton` started in
   `MessengerApplication.onCreate`; on its own `Default` scope it triggers a one-time sync on
   startup and again whenever the network returns (`collectLatest` over `INetworkObserver`).
@@ -138,9 +151,9 @@ When a write cannot reach Firestore, the repository enqueues an `ObxSyncQueueIte
   to `SyncAllDataUseCase` and returns `Result.retry()` on failure so WorkManager backs off.
 - `NetworkObserver` / `INetworkObserver` - a Flow of connectivity used by the coordinator.
 
-`@HiltWorker` needs `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:135`) and the
+`@HiltWorker` needs `androidx.hilt:hilt-compiler` (`app/build.gradle.kts:167`) and the
 `HiltWorkerFactory` wired via `MessengerApplication` `Configuration.Provider`
-(`MessengerApplication.kt:140`); otherwise WorkManager cannot construct the worker with its
+(`MessengerApplication.kt:150`); otherwise WorkManager cannot construct the worker with its
 `SyncAllDataUseCase` dependency.
 
 ## Media transfer and cache

@@ -25,12 +25,12 @@ final color is the key. Firebase (the mail carrier) only ever sees a locked box,
 Alice types `hi` and hits send. Here is the journey, with the real function names.
 
 1. Each phone already has a key pair - a private key (secret, stays on the phone) and a public
-   key (shareable). Made once and stored, in `IdentityKeyStore.getOrCreate`
-   (`data/crypto/IdentityKeyStore.kt:16`). The private key is locked in the Android Keystore
+   key (shareable). Made once, when an account has no key yet, by `E2eeBootstrap`, and stored in
+   `IdentityKeyStore` (`data/crypto/IdentityKeyStore.kt:12`) as a small ring with one key per epoch. The private key is locked in the Android Keystore
    (`KeystoreKeyWrapper`) so even the phone's files do not hold it in the clear.
 
 2. Alice needs Bob's public key. She fetches it from Firebase (where Bob published it) and caches
-   it: `PeerKeyRegistry.ensurePeerKey` (`data/crypto/PeerKeyRegistry.kt:64`).
+   it: `PeerKeyRegistry.ensurePeerKey` (`data/crypto/PeerKeyRegistry.kt:26`).
 
 3. Alice builds the shared key K. She combines her private key with Bob's public key
    (this step is called ECDH), then runs the result through a "key stretcher" (HKDF):

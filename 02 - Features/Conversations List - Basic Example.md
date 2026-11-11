@@ -41,14 +41,14 @@ fun observePresence(list: List<Conversation>) = viewModelScope.launch {
 ## How the real code specialises it
 
 - The exact `onStart`/`catch`/`collect` framing is `loadConversations`
-  (`presentation/viewmodel/ChatsViewModel.kt:81`), wrapped in `flatMapLatest` over auth state so
+  (`presentation/screens/chats/ChatsViewModel.kt:81`), wrapped in `flatMapLatest` over auth state so
   a logout cancels the stream; the stream is the ObjectBox query refreshed by a Firestore snapshot
-  listener (`FirestoreService.getAllConversations`, `data/remote/firebase/FirestoreService.kt:493`).
+  listener (`FirestoreService.getAllConversations`, `data/remote/firebase/FirestoreService.kt:31`).
 - The `combine` fan-out is `observeMultiple` in `ObserveUserPresenceUseCase`, driven by
-  `observeParticipantPresence` (`ChatsViewModel.kt:155`), which cancels the previous
+  `observeParticipantPresence` (`ChatsViewModel.kt:158`), which cancels the previous
   `presenceJob` before resubscribing so a stale participant set cannot leak an observer.
 - Avatars fan out the same way but fetch-once-guarded (`loadParticipantAvatars`,
-  `ChatsViewModel.kt:110`), names come from live cached user rows (`observeParticipants`,
+  `ChatsViewModel.kt:67`), names come from live cached user rows (`observeParticipants`,
   `:64`) so renamed or deleted peers update, and per-user deletion rides `visibleTo` +
   `clearedAt` instead of server-side copies.
 
